@@ -174,6 +174,7 @@
     <Compile Include="StandardOPage\Form_ReAnalyze.Designer.cs">
       <DependentUpon>Form_ReAnalyze.cs</DependentUpon>
     </Compile>
+    <Compile Include="StandardOPage\Utils\FontV15Algorithm.cs" />
     <Compile Include="UNIVACCO.cs">
       <SubType>Form</SubType>
     </Compile>

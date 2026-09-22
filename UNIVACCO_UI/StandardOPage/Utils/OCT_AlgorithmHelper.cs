@@ -4548,11 +4548,42 @@ namespace StandardOPage
 );
             return (meshp_imgs, meshp_result_imgs, meshp_results, breakArea_01_crop);
         }
-        /// <summary> 
-        /// 陰版分析
+        /// <summary>
+        /// 陰版分析 - 2026-09-23 改接 Font v15 新對位演算法。
+        /// 舊版 Connected Components / Resize 流程保留在 Yin_analz_Legacy() 供回退比對。
         /// </summary>
         public static (Font_Imgs, Font_Imgs, Font_Results, Font_Imgs, Font_Results, List<FontInfo>)?
             Yin_analz(
+                Mat yinimage,
+                List<TemplateData> YinTemplates,
+                OCT_Parameters_CardType current_params,
+                OCT_Parameters_PrintType current_printtype_params,
+                OCT_Parameters_SaveOptions saveoptions,
+                string cardType
+            )
+        {
+            try
+            {
+                Debug.WriteLine("[FontV15][Yin] 使用 v15：整條粗定位 -> 分字級局部 NCC -> ±5px 精細對位 -> Binary Difference");
+                return FontV15Algorithm.AnalyzeYin(
+                    yinimage,
+                    YinTemplates,
+                    saveoptions,
+                    cardType);
+            }
+            catch (Exception ex)
+            {
+                OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "Yin FontV15 分析失敗", ex.ToString());
+                Debug.WriteLine($"[FontV15][Yin ERROR] {ex}");
+                return null;
+            }
+        }
+
+        /// <summary> 
+        /// 陰版分析（Legacy 舊版，保留供回退/比對）
+        /// </summary>
+        public static (Font_Imgs, Font_Imgs, Font_Results, Font_Imgs, Font_Results, List<FontInfo>)?
+            Yin_analz_Legacy(
                 Mat yinimage,
                 List<TemplateData> YinTemplates,
                 OCT_Parameters_CardType current_params,
@@ -4610,12 +4641,43 @@ namespace StandardOPage
             }
         }
         /// <summary>
-        /// 陽版分析
+        /// 陽版分析 - 2026-09-23 改接 Font v15 新對位演算法。
+        /// 舊版 Connected Components / Resize 流程保留在 Yang_analz_Legacy() 供回退比對。
         /// </summary>
-
         public static (Font_Imgs, Font_Imgs, Font_Results, Font_Imgs, Font_Results, List<FontInfo>, Mat)?
-    Yang_analz(Mat yangimage, List<TemplateData> YangTemplates, OCT_Parameters_CardType current_params, OCT_Parameters_PrintType current_printtype_params, OCT_Parameters_SaveOptions saveoptions, string cardType,
-                TaskCompletionSource<Mat> breakArea03Ready = null)  // ← 新增參數
+            Yang_analz(
+                Mat yangimage,
+                List<TemplateData> YangTemplates,
+                OCT_Parameters_CardType current_params,
+                OCT_Parameters_PrintType current_printtype_params,
+                OCT_Parameters_SaveOptions saveoptions,
+                string cardType,
+                TaskCompletionSource<Mat> breakArea03Ready = null)
+        {
+            try
+            {
+                Debug.WriteLine("[FontV15][Yang] 使用 v15：整條粗定位 -> 分字級局部 NCC -> ±5px 精細對位 -> Binary Difference");
+                return FontV15Algorithm.AnalyzeYang(
+                    yangimage,
+                    YangTemplates,
+                    saveoptions,
+                    cardType,
+                    breakArea03Ready);
+            }
+            catch (Exception ex)
+            {
+                OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "Yang FontV15 分析失敗", ex.ToString());
+                Debug.WriteLine($"[FontV15][Yang ERROR] {ex}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// 陽版分析（Legacy 舊版，保留供回退/比對）
+        /// </summary>
+        public static (Font_Imgs, Font_Imgs, Font_Results, Font_Imgs, Font_Results, List<FontInfo>, Mat)?
+    Yang_analz_Legacy(Mat yangimage, List<TemplateData> YangTemplates, OCT_Parameters_CardType current_params, OCT_Parameters_PrintType current_printtype_params, OCT_Parameters_SaveOptions saveoptions, string cardType,
+                TaskCompletionSource<Mat> breakArea03Ready = null)
         {
             Mat yang_processimg = yangimage.Clone();
             CvInvoke.CvtColor(yang_processimg, yang_processimg, ColorConversion.Bgr2Gray);
