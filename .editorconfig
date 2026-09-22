@@ -1,0 +1,4 @@
+﻿[*.cs]
+
+# CS1690: 存取傳址封送類別之欄位上的成員，可能會導致執行階段例外狀況
+dotnet_diagnostic.CS1690.severity = none

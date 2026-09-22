@@ -1,0 +1,412 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props" Condition="Exists('$(MSBuildExtensionsPath)\$(MSBuildToolsVersion)\Microsoft.Common.props')" />
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{F0313F70-35F0-4653-A217-1EE938D1BC9B}</ProjectGuid>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>UNIVACCO_UI</RootNamespace>
+    <AssemblyName>UNIVACCO_UI</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <Deterministic>true</Deterministic>
+    <NuGetPackageImportStamp>
+    </NuGetPackageImportStamp>
+    <TargetFrameworkProfile />
+    <PublishUrl>publish\</PublishUrl>
+    <Install>true</Install>
+    <InstallFrom>Disk</InstallFrom>
+    <UpdateEnabled>false</UpdateEnabled>
+    <UpdateMode>Foreground</UpdateMode>
+    <UpdateInterval>7</UpdateInterval>
+    <UpdateIntervalUnits>Days</UpdateIntervalUnits>
+    <UpdatePeriodically>false</UpdatePeriodically>
+    <UpdateRequired>false</UpdateRequired>
+    <MapFileExtensions>true</MapFileExtensions>
+    <ApplicationRevision>0</ApplicationRevision>
+    <ApplicationVersion>1.0.0.%2a</ApplicationVersion>
+    <IsWebBootstrapper>false</IsWebBootstrapper>
+    <UseApplicationTrust>false</UseApplicationTrust>
+    <BootstrapperEnabled>true</BootstrapperEnabled>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>bin\x64\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>true</Prefer32Bit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x64'">
+    <OutputPath>bin\x64\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <CodeAnalysisRuleSet>MinimumRecommendedRules.ruleset</CodeAnalysisRuleSet>
+    <Prefer32Bit>true</Prefer32Bit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup>
+    <ApplicationIcon>UNIVACCO Logo.ico</ApplicationIcon>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x86'">
+    <DebugSymbols>true</DebugSymbols>
+    <OutputPath>bin\x86\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|x86'">
+    <OutputPath>bin\x86\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <Optimize>true</Optimize>
+    <DebugType>pdbonly</DebugType>
+    <PlatformTarget>x86</PlatformTarget>
+    <LangVersion>7.3</LangVersion>
+    <ErrorReport>prompt</ErrorReport>
+    <Prefer32Bit>true</Prefer32Bit>
+  </PropertyGroup>
+  <PropertyGroup />
+  <PropertyGroup />
+  <PropertyGroup />
+  <PropertyGroup />
+  <PropertyGroup>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="Basler.Pylon, Version=1.1.0.0, Culture=neutral, PublicKeyToken=e389355f398382ab, processorArchitecture=AMD64">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\libs\Basler.Pylon.dll</HintPath>
+    </Reference>
+    <Reference Include="ids_peak_dotnet, Version=1.4.1.0, Culture=neutral, processorArchitecture=AMD64">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\libs\ids_peak_dotnet.dll</HintPath>
+    </Reference>
+    <Reference Include="ids_peak_ipl_dotnet, Version=1.3.2.7, Culture=neutral, processorArchitecture=AMD64">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\libs\ids_peak_ipl_dotnet.dll</HintPath>
+    </Reference>
+    <Reference Include="Microsoft.VisualBasic" />
+    <Reference Include="System" />
+    <Reference Include="System.ComponentModel.Composition" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Configuration.Install" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.Numerics" />
+    <Reference Include="System.Transactions" />
+    <Reference Include="System.Windows.Forms.DataVisualization" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Deployment" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="BreakAreaForm.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="BreakAreaForm.Designer.cs">
+      <DependentUpon>BreakAreaForm.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Models\Arduino.cs" />
+    <Compile Include="Models\baslerCamcs.cs" />
+    <Compile Include="Access.cs" />
+    <Compile Include="Models\CommonTypes.cs" />
+    <Compile Include="Properties\Resources.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DesignTime>True</DesignTime>
+      <DependentUpon>Resources.resx</DependentUpon>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Compile>
+    <Compile Include="StandardOPage\Form_Setting.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\Form_Setting.Designer.cs">
+      <DependentUpon>Form_Setting.cs</DependentUpon>
+    </Compile>
+    <Compile Include="LightCorrection.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="LightCorrection.Designer.cs">
+      <DependentUpon>LightCorrection.cs</DependentUpon>
+    </Compile>
+    <Compile Include="StandardOPage\Form_ReAnalyze.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\Form_ReAnalyze.Designer.cs">
+      <DependentUpon>Form_ReAnalyze.cs</DependentUpon>
+    </Compile>
+    <Compile Include="UNIVACCO.cs">
+      <SubType>Form</SubType>
+    </Compile>
+    <Compile Include="UNIVACCO.Designer.cs">
+      <DependentUpon>UNIVACCO.cs</DependentUpon>
+    </Compile>
+    <Compile Include="Program.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="StandardOPage\UserControl_Main.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_Main.Designer.cs">
+      <DependentUpon>UserControl_Main.cs</DependentUpon>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_Threshold.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_Threshold.Designer.cs">
+      <DependentUpon>UserControl_Threshold.cs</DependentUpon>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_SaveOptions.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_SaveOptions.Designer.cs">
+      <DependentUpon>UserControl_SaveOptions.cs</DependentUpon>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_TempStandard.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_TempStandard.Designer.cs">
+      <DependentUpon>UserControl_TempStandard.cs</DependentUpon>
+    </Compile>
+    <Compile Include="UserControl_Setting.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="UserControl_Setting.Designer.cs">
+      <DependentUpon>UserControl_Setting.cs</DependentUpon>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_Rules.cs">
+      <SubType>UserControl</SubType>
+    </Compile>
+    <Compile Include="StandardOPage\UserControl_Rules.Designer.cs">
+      <DependentUpon>UserControl_Rules.cs</DependentUpon>
+    </Compile>
+    <Compile Include="StandardOPage\Utils\OCT_AlgorithmHelper.cs" />
+    <Compile Include="StandardOPage\Utils\OCT_LogHelper.cs" />
+    <Compile Include="StandardOPage\Utils\OCT_SaveFileHelper.cs" />
+    <Compile Include="StandardOPage\Utils\OCT_Rules.cs" />
+    <Compile Include="StandardOPage\Utils\OCT_DatabaseHelper.cs" />
+    <Compile Include="StandardOPage\Utils\OCT_Parameters.cs" />
+    <EmbeddedResource Include="BreakAreaForm.resx">
+      <DependentUpon>BreakAreaForm.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\Form_Setting.resx">
+      <DependentUpon>Form_Setting.cs</DependentUpon>
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <EmbeddedResource Include="LightCorrection.resx">
+      <DependentUpon>LightCorrection.cs</DependentUpon>
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\Form_ReAnalyze.resx">
+      <DependentUpon>Form_ReAnalyze.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UNIVACCO.resx">
+      <DependentUpon>UNIVACCO.cs</DependentUpon>
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <EmbeddedResource Include="Properties\Resources.resx">
+      <Generator>ResXFileCodeGenerator</Generator>
+      <SubType>Designer</SubType>
+      <LastGenOutput>Resources.Designer.cs</LastGenOutput>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\UserControl_Main.resx">
+      <DependentUpon>UserControl_Main.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\UserControl_Threshold.resx">
+      <DependentUpon>UserControl_Threshold.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\UserControl_SaveOptions.resx">
+      <DependentUpon>UserControl_SaveOptions.cs</DependentUpon>
+      <SubType>Designer</SubType>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\UserControl_TempStandard.resx">
+      <DependentUpon>UserControl_TempStandard.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="UserControl_Setting.resx">
+      <DependentUpon>UserControl_Setting.cs</DependentUpon>
+    </EmbeddedResource>
+    <EmbeddedResource Include="StandardOPage\UserControl_Rules.resx">
+      <DependentUpon>UserControl_Rules.cs</DependentUpon>
+    </EmbeddedResource>
+    <None Include="app.manifest" />
+    <None Include="Properties\Settings.settings">
+      <Generator>SettingsSingleFileGenerator</Generator>
+      <LastGenOutput>Settings.Designer.cs</LastGenOutput>
+    </None>
+    <Compile Include="Properties\Settings.Designer.cs">
+      <AutoGen>True</AutoGen>
+      <DependentUpon>Settings.settings</DependentUpon>
+      <DesignTimeSharedInput>True</DesignTimeSharedInput>
+    </Compile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="App.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\iconfinder_camera_226593.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\camera_unconnect.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\camera_connect.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\light_connect.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Resources\light_unconnect.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="a503u-pf4pg-001.ico" />
+    <Content Include="UNIVACCO Logo.ico" />
+    <EmbeddedResource Include="Resources\motor_connect.png" />
+    <EmbeddedResource Include="Resources\motor_unconnect.png" />
+  </ItemGroup>
+  <ItemGroup>
+    <Analyzer Include="bin\x64\Debug\ids_peak.dll" />
+    <Analyzer Include="bin\x64\Debug\ids_peak_dotnet.dll" />
+    <Analyzer Include="bin\x64\Debug\ids_peak_dotnet_interface.dll" />
+    <Analyzer Include="bin\x64\Debug\ids_peak_ipl.dll" />
+    <Analyzer Include="bin\x64\Debug\ids_peak_ipl_dotnet.dll" />
+    <Analyzer Include="bin\x64\Debug\ids_peak_ipl_dotnet_interface.dll" />
+  </ItemGroup>
+  <ItemGroup>
+    <WCFMetadata Include="Connected Services\" />
+  </ItemGroup>
+  <ItemGroup>
+    <COMReference Include="ADOX">
+      <Guid>{00000600-0000-0010-8000-00AA006D2EA4}</Guid>
+      <VersionMajor>2</VersionMajor>
+      <VersionMinor>8</VersionMinor>
+      <Lcid>0</Lcid>
+      <WrapperTool>tlbimp</WrapperTool>
+      <Isolated>False</Isolated>
+      <EmbedInteropTypes>True</EmbedInteropTypes>
+    </COMReference>
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Emgu.CV">
+      <Version>4.5.1.4349</Version>
+    </PackageReference>
+    <PackageReference Include="Emgu.CV.Bitmap">
+      <Version>4.5.1.4349</Version>
+    </PackageReference>
+    <PackageReference Include="Emgu.CV.runtime.windows">
+      <Version>4.5.1.4349</Version>
+    </PackageReference>
+    <PackageReference Include="Emgu.CV.UI">
+      <Version>4.5.1.4349</Version>
+    </PackageReference>
+    <PackageReference Include="EPPlus">
+      <Version>4.5.3.3</Version>
+    </PackageReference>
+    <PackageReference Include="Guna.UI2.WinForms">
+      <Version>2.0.4.7</Version>
+    </PackageReference>
+    <PackageReference Include="ini-parser">
+      <Version>2.5.2</Version>
+    </PackageReference>
+    <PackageReference Include="MetroModernUI">
+      <Version>1.4.0</Version>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Office.Interop.Excel">
+      <Version>15.0.4795.1000</Version>
+    </PackageReference>
+    <PackageReference Include="MySql.Data">
+      <Version>8.0.31</Version>
+    </PackageReference>
+    <PackageReference Include="NPOI">
+      <Version>2.5.3</Version>
+    </PackageReference>
+    <PackageReference Include="OpenCvSharp3-AnyCPU">
+      <Version>4.0.0.20181129</Version>
+    </PackageReference>
+    <PackageReference Include="System.Data.SQLite">
+      <Version>1.0.119</Version>
+    </PackageReference>
+  </ItemGroup>
+  <ItemGroup>
+    <BootstrapperPackage Include=".NETFramework,Version=v4.7.2">
+      <Visible>False</Visible>
+      <ProductName>Microsoft .NET Framework 4.7.2 %28x86 和 x64%29</ProductName>
+      <Install>true</Install>
+    </BootstrapperPackage>
+    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
+      <Visible>False</Visible>
+      <ProductName>.NET Framework 3.5 SP1</ProductName>
+      <Install>false</Install>
+    </BootstrapperPackage>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <PropertyGroup>
+    <PreBuildEvent>if not exist "$(ProjectDir)$(OutDir)" mkdir "$(ProjectDir)$(OutDir)"
+
+if not exist "$(ProjectDir)$(OutDir)\threshold_templates" (
+    mkdir "$(ProjectDir)$(OutDir)\threshold_templates"
+    xcopy "$(SolutionDir)\resources\threshold_templates\*" "$(ProjectDir)$(OutDir)\threshold_templates" /D /Y /E
+)
+
+if not exist "$(ProjectDir)$(OutDir)\templates" (
+    mkdir "$(ProjectDir)$(OutDir)\templates"
+    xcopy "$(SolutionDir)\resources\templates\*" "$(ProjectDir)$(OutDir)\templates" /D /Y /E
+)
+
+
+if exist "$(SolutionDir)\libs\*.dll" (
+    xcopy "$(SolutionDir)\libs\*.dll" "$(ProjectDir)$(OutDir)" /D /Y
+)
+
+if exist "$(SolutionDir)\libs\*.ini" (
+    xcopy "$(SolutionDir)\libs\*.ini" "$(ProjectDir)$(OutDir)" /D /Y
+)
+
+if exist "$(SolutionDir)\libs\*.sys" (
+    xcopy "$(SolutionDir)\libs\*.sys" "$(ProjectDir)$(OutDir)" /D /Y
+)
+
+if exist "$(SolutionDir)\libs\*.db" (
+    xcopy "$(SolutionDir)\libs\*.db" "$(ProjectDir)$(OutDir)" /D /Y
+)
+</PreBuildEvent>
+  </PropertyGroup>
+</Project>
