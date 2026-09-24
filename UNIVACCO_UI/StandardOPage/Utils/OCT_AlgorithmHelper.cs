@@ -5045,36 +5045,35 @@ namespace StandardOPage
             {
                 byte* ptr = (byte*)meshp_result_img.DataPointer;
                 byte* maskPtr = (byte*)mask.DataPointer;
+                int imageStep = meshp_result_img.Step;
+                int maskStep = mask.Step;
 
-                for (int x = 0; x < meshp_result_img.Width; x++)
+                for (int y = 0; y < meshp_result_img.Height; y++)
                 {
-                    for (int y = 0; y < meshp_result_img.Height; y++)
+                    byte* row = ptr + y * imageStep;
+                    byte* maskRow = maskPtr + y * maskStep;
+                    for (int x = 0; x < meshp_result_img.Width; x++)
                     {
-                        // 獲取原始方式的指針位置
-                        byte* current_ptr = ptr + (x + (meshp_result_img.Width * y));
-                        // 獲取對應位置的遮罩值
-                        byte* current_mask_ptr = maskPtr + (x + (mask.Width * y));
-
-                        // 檢查該像素是否在排除區域外（遮罩值為255）
-                        if (*current_mask_ptr == 255)
+                        if (maskRow[x] == 255)
                         {
-                            // 這個像素不在任何排除區域內
                             total_pixels++;
-
-                            // 檢查它是否為黑色像素
-                            if (*current_ptr == 0)
-                            {
+                            if (row[x] == 0)
                                 blackpixels++;
-                            }
                         }
                     }
                 }
             }
 
-            // 計算標準像素數
-            double total_eliminate_areas = single_area_info.Regions.Sum(x => x.Area);   //計算排除總區域
-            int standard_pixels = Convert.ToInt32((total_pixels - total_eliminate_areas) * meshp_index);
-            double meshp_percentage = (double)(blackpixels - standard_pixels) / (double)total_pixels * 100;
+            // total_pixels 已經只統計 mask==255 的有效像素，這裡不能再扣一次排除面積。
+            if (total_pixels <= 0)
+            {
+                mask.Dispose();
+                processimg.Dispose();
+                throw new InvalidOperationException("重新分析網點區失敗：有效像素為 0，請縮小排除區域。");
+            }
+
+            int standard_pixels = Convert.ToInt32(total_pixels * meshp_index);
+            double meshp_percentage = (double)(blackpixels - standard_pixels) / total_pixels * 100;
             //缺燙
             if (meshp_percentage < 0)
             {
@@ -5115,10 +5114,13 @@ namespace StandardOPage
                     break;
             }
 
+            mask.Dispose();
+            processimg.Dispose();
             return (MeshP_Imgs, MeshP_Result_Imgs, MeshP_Results);
         }
         /// <summary>
-        /// 重新分析陰版單字體
+        /// 重新分析陰版單字體 - 2026-09-24 改用 Font v15。
+        /// 人工框選區域會從缺燙/塞版計算與分母中真正排除。
         /// </summary>
         public static (
             Font_Imgs,
@@ -5137,168 +5139,56 @@ namespace StandardOPage
             OCT_Parameters_CardType currentcardtype_params,
             List<FontInfo> yin_font_infos,
             List<TemplateData> yintemplates,
-            OCT_Parameters_SaveOptions saveoptions
+            OCT_Parameters_SaveOptions saveoptions,
+            string cardType = "白卡"
             )
         {
             string fontName = single_area_info.Name;
-            double threshold = 0.0;
-            Mat processimg = new Mat();
-            int index = 0;
-            switch (fontName)
+            int index = FontNameToIndex(fontName);
+
+            var result = FontV15Algorithm.ReAnalyzeSingleFont(
+                single_area_info.Image,
+                fontName,
+                true,
+                yintemplates,
+                single_area_info.Regions,
+                cardType,
+                saveoptions);
+
+            SetSingleFontReAnalyzeResult(
+                fontName,
+                yin_block_imgs,
+                yin_block_results,
+                yin_defect_imgs,
+                yin_defect_results,
+                result.blockImg,
+                result.blockPercentage,
+                result.defectImg,
+                result.defectPercentage);
+
+            if (yin_font_infos != null && index >= 0 && index < yin_font_infos.Count)
             {
-                case "3pt":
-                    processimg = yin_imgs._3pt;
-                    threshold = currentcardtype_params.yin_parameter._3pt;
-                    index = 0;
-                    break;
-                case "4pt":
-                    processimg = yin_imgs._4pt;
-                    threshold = currentcardtype_params.yin_parameter._4pt;
-                    index = 1;
-                    break;
-                case "5pt":
-                    processimg = yin_imgs._5pt;
-                    threshold = currentcardtype_params.yin_parameter._5pt;
-                    index = 2;
-                    break;
-                case "6pt":
-                    processimg = yin_imgs._6pt;
-                    threshold = currentcardtype_params.yin_parameter._6pt;
-                    index = 3;
-                    break;
-                case "7pt":
-                    processimg = yin_imgs._7pt;
-                    threshold = currentcardtype_params.yin_parameter._7pt;
-                    index = 4;
-                    break;
-                case "8pt":
-                    processimg = yin_imgs._8pt;
-                    threshold = currentcardtype_params.yin_parameter._8pt;
-                    index = 5;
-                    break;
-                case "9pt":
-                    processimg = yin_imgs._9pt;
-                    threshold = currentcardtype_params.yin_parameter._9pt;
-                    index = 6;
-                    break;
-                case "10pt":
-                    processimg = yin_imgs._10pt;
-                    threshold = currentcardtype_params.yin_parameter._10pt;
-                    index = 7;
-                    break;
-                case "11pt":
-                    processimg = yin_imgs._11pt;
-                    threshold = currentcardtype_params.yin_parameter._11pt;
-                    index = 8;
-                    break;
-                case "12pt":
-                    processimg = yin_imgs._12pt;
-                    threshold = currentcardtype_params.yin_parameter._12pt;
-                    index = 9;
-                    break;
-            }
-            //processimg.Save($"test0.bmp");
-            Mat filter_yin_image = Yin_filternoise(processimg.Clone(), fontName);
-            //filter_yin_image.Save($"test1.bmp");
-            CvInvoke.CvtColor(filter_yin_image, filter_yin_image, ColorConversion.Bgr2Gray);
-            CvInvoke.Threshold(filter_yin_image, filter_yin_image, threshold, 255, ThresholdType.Binary); //給廠商調的參數
-            if (single_area_info.Regions.Count != 0)
-            {
-                //輪廓補黑 
-                foreach (Region region in single_area_info.Regions)
-                {
-                    CvInvoke.FillPoly(filter_yin_image, new VectorOfVectorOfPoint(region.Contour), new MCvScalar(0));
-                }
+                Rectangle oldBounds = yin_font_infos[index]?.Bounds ?? Rectangle.Empty;
+                result.fontInfo.Bounds = oldBounds;
+                yin_font_infos[index] = result.fontInfo;
             }
 
-            filter_yin_image = RemoveIsolatedWhitePixels(filter_yin_image);
+            FontV15Algorithm.RecalculateTotals(
+                yin_defect_results,
+                yin_block_results,
+                yin_font_infos);
 
-            int defect_outsidepixels = 0;
-            (filter_yin_image, defect_outsidepixels) = Yin_Calc_OutsideBlock_ResizeFontImg(filter_yin_image, fontName, yintemplates[index].Width);
+            Debug.WriteLine(
+                $"[FontV15][ReAnalyze][Yin][{fontName}] " +
+                $"defect={result.defectPercentage:F4}%, block={result.blockPercentage:F4}%, " +
+                $"excluded={single_area_info.Regions?.Count ?? 0}");
 
-            yin_font_infos[index].Defect_Pixels = 0;  //將之前計算結果歸零
-            yin_font_infos[index].Block_Pixels = 0;   //將之前計算結果歸零
-            yin_font_infos[index].Defect_Pixels = defect_outsidepixels; //將剛剛初步計算缺燙數加入
-
-            //字體對位校正
-            CvInvoke.Resize(filter_yin_image, filter_yin_image, yintemplates[index].Image.Size, 0, 0, Inter.Nearest);
-
-            filter_yin_image = FontImg_Correction(filter_yin_image, yintemplates[index].Image, true);
-
-            Mat yin_defect_img = new Mat();
-            Mat yin_block_img = new Mat();
-            double defect_percentage;
-            double block_percentage;
-            (yin_block_img, block_percentage, yin_defect_img, defect_percentage) = Yin_Calc_Single(yin_font_infos[index], filter_yin_image, yintemplates[index]);
-
-            switch (fontName)
-            {
-                case "3pt":
-                    yin_defect_imgs._3pt = yin_defect_img;
-                    yin_defect_results._3pt = defect_percentage;
-                    yin_block_imgs._3pt = yin_block_img;
-                    yin_block_results._3pt = block_percentage;
-                    break;
-                case "4pt":
-                    yin_defect_imgs._4pt = yin_defect_img;
-                    yin_defect_results._4pt = defect_percentage;
-                    yin_block_imgs._4pt = yin_block_img;
-                    yin_block_results._4pt = block_percentage;
-                    break;
-                case "5pt":
-                    yin_defect_imgs._5pt = yin_defect_img;
-                    yin_defect_results._5pt = defect_percentage;
-                    yin_block_imgs._5pt = yin_block_img;
-                    yin_block_results._5pt = block_percentage;
-                    break;
-                case "6pt":
-                    yin_defect_imgs._6pt = yin_defect_img;
-                    yin_defect_results._6pt = defect_percentage;
-                    yin_block_imgs._6pt = yin_block_img;
-                    yin_block_results._6pt = block_percentage;
-                    break;
-                case "7pt":
-                    yin_defect_imgs._7pt = yin_defect_img;
-                    yin_defect_results._7pt = defect_percentage;
-                    yin_block_imgs._7pt = yin_block_img;
-                    yin_block_results._7pt = block_percentage;
-                    break;
-                case "8pt":
-                    yin_defect_imgs._8pt = yin_defect_img;
-                    yin_defect_results._8pt = defect_percentage;
-                    yin_block_imgs._8pt = yin_block_img;
-                    yin_block_results._8pt = block_percentage;
-                    break;
-                case "9pt":
-                    yin_defect_imgs._9pt = yin_defect_img;
-                    yin_defect_results._9pt = defect_percentage;
-                    yin_block_imgs._9pt = yin_block_img;
-                    yin_block_results._9pt = block_percentage;
-                    break;
-                case "10pt":
-                    yin_defect_imgs._10pt = yin_defect_img;
-                    yin_defect_results._10pt = defect_percentage;
-                    yin_block_imgs._10pt = yin_block_img;
-                    yin_block_results._10pt = block_percentage;
-                    break;
-                case "11pt":
-                    yin_defect_imgs._11pt = yin_defect_img;
-                    yin_defect_results._11pt = defect_percentage;
-                    yin_block_imgs._11pt = yin_block_img;
-                    yin_block_results._11pt = block_percentage;
-                    break;
-                case "12pt":
-                    yin_defect_imgs._12pt = yin_defect_img;
-                    yin_defect_results._12pt = defect_percentage;
-                    yin_block_imgs._12pt = yin_block_img;
-                    yin_block_results._12pt = block_percentage;
-                    break;
-
-            }   //計算結果寫入到對應結果
             return (yin_imgs, yin_block_imgs, yin_block_results, yin_defect_imgs, yin_defect_results, yin_font_infos);
         }
+
         /// <summary>
-        /// 重新分析陽版單字體
+        /// 重新分析陽版單字體 - 2026-09-24 改用 Font v15。
+        /// 人工框選區域會從缺燙/塞版計算與分母中真正排除。
         /// </summary>
         public static (
             Font_Imgs,
@@ -5317,220 +5207,177 @@ namespace StandardOPage
             OCT_Parameters_CardType currentcardtype_params,
             List<FontInfo> yang_font_infos,
             List<TemplateData> yangtemplates,
-            OCT_Parameters_SaveOptions saveoptions
+            OCT_Parameters_SaveOptions saveoptions,
+            string cardType = "白卡"
             )
         {
             string fontName = single_area_info.Name;
-            double threshold = 0.0;
-            Mat processimg = new Mat();
-            int index = 0;
+            int index = FontNameToIndex(fontName);
+
+            var result = FontV15Algorithm.ReAnalyzeSingleFont(
+                single_area_info.Image,
+                fontName,
+                false,
+                yangtemplates,
+                single_area_info.Regions,
+                cardType,
+                saveoptions);
+
+            SetSingleFontReAnalyzeResult(
+                fontName,
+                yang_block_imgs,
+                yang_block_results,
+                yang_defect_imgs,
+                yang_defect_results,
+                result.blockImg,
+                result.blockPercentage,
+                result.defectImg,
+                result.defectPercentage);
+
+            if (yang_font_infos != null && index >= 0 && index < yang_font_infos.Count)
+            {
+                Rectangle oldBounds = yang_font_infos[index]?.Bounds ?? Rectangle.Empty;
+                result.fontInfo.Bounds = oldBounds;
+                yang_font_infos[index] = result.fontInfo;
+            }
+
+            FontV15Algorithm.RecalculateTotals(
+                yang_defect_results,
+                yang_block_results,
+                yang_font_infos);
+
+            Debug.WriteLine(
+                $"[FontV15][ReAnalyze][Yang][{fontName}] " +
+                $"defect={result.defectPercentage:F4}%, block={result.blockPercentage:F4}%, " +
+                $"excluded={single_area_info.Regions?.Count ?? 0}");
+
+            return (yang_imgs, yang_block_imgs, yang_block_results, yang_defect_imgs, yang_defect_results, yang_font_infos);
+        }
+
+        private static int FontNameToIndex(string fontName)
+        {
             switch (fontName)
             {
-                case "3pt":
-                    processimg = yang_imgs._3pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._3pt;
-                    index = 0;
-                    break;
-                case "4pt":
-                    processimg = yang_imgs._4pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._4pt;
-                    index = 1;
-                    break;
-                case "5pt":
-                    processimg = yang_imgs._5pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._5pt;
-                    index = 2;
-                    break;
-                case "6pt":
-                    processimg = yang_imgs._6pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._6pt;
-                    index = 3;
-                    break;
-                case "7pt":
-                    processimg = yang_imgs._7pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._7pt;
-                    index = 4;
-                    break;
-                case "8pt":
-                    processimg = yang_imgs._8pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._8pt;
-                    index = 5;
-                    break;
-                case "9pt":
-                    processimg = yang_imgs._9pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._9pt;
-                    index = 6;
-                    break;
-                case "10pt":
-                    processimg = yang_imgs._10pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._10pt;
-                    index = 7;
-                    break;
-                case "11pt":
-                    processimg = yang_imgs._11pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._11pt;
-                    index = 8;
-                    break;
-                case "12pt":
-                    processimg = yang_imgs._12pt.Clone();
-                    threshold = currentcardtype_params.yang_parameter._12pt;
-                    index = 9;
-                    break;
+                case "3pt": return 0;
+                case "4pt": return 1;
+                case "5pt": return 2;
+                case "6pt": return 3;
+                case "7pt": return 4;
+                case "8pt": return 5;
+                case "9pt": return 6;
+                case "10pt": return 7;
+                case "11pt": return 8;
+                case "12pt": return 9;
+                default: throw new ArgumentException("未知字級：" + fontName);
             }
-            //連通區域裁切後進來
-            CvInvoke.CvtColor(processimg, processimg, ColorConversion.Bgr2Gray);
-            CvInvoke.Threshold(processimg, processimg, threshold, 255, ThresholdType.Binary); //給廠商調的參數
-
-            //陽版字體補黑
-            if (single_area_info.Regions.Count != 0)
-            {
-                //輪廓補黑 
-                foreach (Region region in single_area_info.Regions)
-                {
-                    CvInvoke.FillPoly(processimg, new VectorOfVectorOfPoint(region.Contour), new MCvScalar(0));
-                }
-            }
-
-            int block_outsidepixels = 0;
-            (processimg, block_outsidepixels) = Yang_Calc_OutsideBlock_ResizeFontImg(processimg, fontName, yangtemplates[index].Width);
-            yang_font_infos[index].Defect_Pixels = 0;  //將之前計算結果歸零
-            yang_font_infos[index].Block_Pixels = 0;   //將之前計算結果歸零
-            yang_font_infos[index].Block_Pixels = block_outsidepixels; //將剛剛初步計算缺燙數加入
-
-            // 尺寸不一致時進行 Resize
-            if (processimg.Size != yangtemplates[index].Image.Size)
-            {
-                CvInvoke.Resize(processimg, processimg, yangtemplates[index].Image.Size, 0, 0, Inter.Nearest);
-            }
-            //字體對位校正
-            processimg = FontImg_Correction(processimg, yangtemplates[index].Image, false);
-            Mat yang_defect_img = new Mat();
-            Mat yang_block_img = new Mat();
-            double defect_percentage;
-            double block_percentage;
-            try
-            {
-                (yang_block_img, block_percentage, yang_defect_img, defect_percentage) = Yang_Calc_Single(yang_font_infos[index], processimg, yangtemplates[index]);
-                switch (fontName)
-                {
-                    case "3pt":
-                        yang_defect_imgs._3pt = yang_defect_img;
-                        yang_defect_results._3pt = defect_percentage;
-                        yang_block_imgs._3pt = yang_block_img;
-                        yang_block_results._3pt = block_percentage;
-                        break;
-                    case "4pt":
-                        yang_defect_imgs._4pt = yang_defect_img;
-                        yang_defect_results._4pt = defect_percentage;
-                        yang_block_imgs._4pt = yang_block_img;
-                        yang_block_results._4pt = block_percentage;
-                        break;
-                    case "5pt":
-                        yang_defect_imgs._5pt = yang_defect_img;
-                        yang_defect_results._5pt = defect_percentage;
-                        yang_block_imgs._5pt = yang_block_img;
-                        yang_block_results._5pt = block_percentage;
-                        break;
-                    case "6pt":
-                        yang_defect_imgs._6pt = yang_defect_img;
-                        yang_defect_results._6pt = defect_percentage;
-                        yang_block_imgs._6pt = yang_block_img;
-                        yang_block_results._6pt = block_percentage;
-                        break;
-                    case "7pt":
-                        yang_defect_imgs._7pt = yang_defect_img;
-                        yang_defect_results._7pt = defect_percentage;
-                        yang_block_imgs._7pt = yang_block_img;
-                        yang_block_results._7pt = block_percentage;
-                        break;
-                    case "8pt":
-                        yang_defect_imgs._8pt = yang_defect_img;
-                        yang_defect_results._8pt = defect_percentage;
-                        yang_block_imgs._8pt = yang_block_img;
-                        yang_block_results._8pt = block_percentage;
-                        break;
-                    case "9pt":
-                        yang_defect_imgs._9pt = yang_defect_img;
-                        yang_defect_results._9pt = defect_percentage;
-                        yang_block_imgs._9pt = yang_block_img;
-                        yang_block_results._9pt = block_percentage;
-                        break;
-                    case "10pt":
-                        yang_defect_imgs._10pt = yang_defect_img;
-                        yang_defect_results._10pt = defect_percentage;
-                        yang_block_imgs._10pt = yang_block_img;
-                        yang_block_results._10pt = block_percentage;
-                        break;
-                    case "11pt":
-                        yang_defect_imgs._11pt = yang_defect_img;
-                        yang_defect_results._11pt = defect_percentage;
-                        yang_block_imgs._11pt = yang_block_img;
-                        yang_block_results._11pt = block_percentage;
-                        break;
-                    case "12pt":
-                        yang_defect_imgs._12pt = yang_defect_img;
-                        yang_defect_results._12pt = defect_percentage;
-                        yang_block_imgs._12pt = yang_block_img;
-                        yang_block_results._12pt = block_percentage;
-                        break;
-                }
-                return (yang_imgs, yang_block_imgs, yang_block_results, yang_defect_imgs, yang_defect_results, yang_font_infos);
-            }
-            catch (Exception ex)
-            {
-                throw;
-            }
-
         }
+
+        private static void SetSingleFontReAnalyzeResult(
+            string fontName,
+            Font_Imgs blockImgs,
+            Font_Results blockResults,
+            Font_Imgs defectImgs,
+            Font_Results defectResults,
+            Mat blockImg,
+            double blockPercentage,
+            Mat defectImg,
+            double defectPercentage)
+        {
+            switch (fontName)
+            {
+                case "3pt": blockImgs._3pt = blockImg; blockResults._3pt = blockPercentage; defectImgs._3pt = defectImg; defectResults._3pt = defectPercentage; break;
+                case "4pt": blockImgs._4pt = blockImg; blockResults._4pt = blockPercentage; defectImgs._4pt = defectImg; defectResults._4pt = defectPercentage; break;
+                case "5pt": blockImgs._5pt = blockImg; blockResults._5pt = blockPercentage; defectImgs._5pt = defectImg; defectResults._5pt = defectPercentage; break;
+                case "6pt": blockImgs._6pt = blockImg; blockResults._6pt = blockPercentage; defectImgs._6pt = defectImg; defectResults._6pt = defectPercentage; break;
+                case "7pt": blockImgs._7pt = blockImg; blockResults._7pt = blockPercentage; defectImgs._7pt = defectImg; defectResults._7pt = defectPercentage; break;
+                case "8pt": blockImgs._8pt = blockImg; blockResults._8pt = blockPercentage; defectImgs._8pt = defectImg; defectResults._8pt = defectPercentage; break;
+                case "9pt": blockImgs._9pt = blockImg; blockResults._9pt = blockPercentage; defectImgs._9pt = defectImg; defectResults._9pt = defectPercentage; break;
+                case "10pt": blockImgs._10pt = blockImg; blockResults._10pt = blockPercentage; defectImgs._10pt = defectImg; defectResults._10pt = defectPercentage; break;
+                case "11pt": blockImgs._11pt = blockImg; blockResults._11pt = blockPercentage; defectImgs._11pt = defectImg; defectResults._11pt = defectPercentage; break;
+                case "12pt": blockImgs._12pt = blockImg; blockResults._12pt = blockPercentage; defectImgs._12pt = defectImg; defectResults._12pt = defectPercentage; break;
+                default: throw new ArgumentException("未知字級：" + fontName);
+            }
+        }
+
         /// <summary>
-        /// 重新分析飽滿區
+        /// 重新分析飽滿區。
+        /// 人工排除區域同時從白像素與有效總像素分母中排除。
         /// </summary>
         public static Fullness_Results Single_Fullness_analz(
             Fullness_Results fullness_results,
             SingleAreaInfo single_area_info,
             OCT_Parameters_CardType current_params,
             OCT_Parameters_SaveOptions saveoptions
-)
+        )
         {
             Mat fullness_processimg = single_area_info.Image.Clone();
-            CvInvoke.CvtColor(fullness_processimg, fullness_processimg, ColorConversion.Bgr2Gray);
-            CvInvoke.Threshold(fullness_processimg, fullness_processimg, current_params.fullness_parameter.Threshold, 255, ThresholdType.Binary);
-
-            if (saveoptions.saveoption.Fullness_Threshold)
+            Mat mask = null;
+            try
             {
-                CvInvoke.Imwrite("Fullness_2_threshold.bmp", fullness_processimg);
-            }
+                CvInvoke.CvtColor(fullness_processimg, fullness_processimg, ColorConversion.Bgr2Gray);
+                CvInvoke.Threshold(
+                    fullness_processimg,
+                    fullness_processimg,
+                    current_params.fullness_parameter.Threshold,
+                    255,
+                    ThresholdType.Binary);
 
-            // 排除使用者框選的區域（與 MeshP 的遮罩邏輯一致）
-            if (single_area_info.Regions.Count != 0)
-            {
-                foreach (Region region in single_area_info.Regions)
+                if (saveoptions.saveoption.Fullness_Threshold)
+                    CvInvoke.Imwrite("Fullness_2_threshold.bmp", fullness_processimg);
+
+                mask = new Mat(fullness_processimg.Size, DepthType.Cv8U, 1);
+                mask.SetTo(new MCvScalar(255));
+
+                if (single_area_info.Regions != null)
                 {
-                    CvInvoke.FillPoly(fullness_processimg, new VectorOfVectorOfPoint(region.Contour), new MCvScalar(0));
-                }
-            }
-
-            int whitepixels = 0;
-            int totalPixels = fullness_processimg.Width * fullness_processimg.Height;
-
-            unsafe
-            {
-                byte* ptr = (byte*)fullness_processimg.DataPointer;
-                for (int x = 0; x < fullness_processimg.Width; x++)
-                {
-                    for (int y = 0; y < fullness_processimg.Height; y++)
+                    foreach (Region region in single_area_info.Regions)
                     {
-                        byte* current_ptr = ptr + (x + (fullness_processimg.Width * y));
-                        if (*current_ptr == 255)
+                        if (region?.Contour == null || region.Contour.Size < 3)
+                            continue;
+                        using (var contours = new VectorOfVectorOfPoint(region.Contour))
                         {
-                            whitepixels++;
+                            CvInvoke.FillPoly(mask, contours, new MCvScalar(0));
                         }
                     }
                 }
-            }
 
-            fullness_results.Defect_Result = (double)whitepixels / totalPixels * 100;
-            return fullness_results;
+                int whitepixels = 0;
+                int effectivePixels = 0;
+
+                unsafe
+                {
+                    byte* imagePtr = (byte*)fullness_processimg.DataPointer;
+                    byte* maskPtr = (byte*)mask.DataPointer;
+                    int imageStep = fullness_processimg.Step;
+                    int maskStep = mask.Step;
+
+                    for (int y = 0; y < fullness_processimg.Height; y++)
+                    {
+                        byte* row = imagePtr + y * imageStep;
+                        byte* maskRow = maskPtr + y * maskStep;
+                        for (int x = 0; x < fullness_processimg.Width; x++)
+                        {
+                            if (maskRow[x] != 255)
+                                continue;
+
+                            effectivePixels++;
+                            if (row[x] == 255)
+                                whitepixels++;
+                        }
+                    }
+                }
+
+                if (effectivePixels <= 0)
+                    throw new InvalidOperationException("重新分析飽滿區失敗：有效像素為 0，請縮小排除區域。");
+
+                fullness_results.Defect_Result = whitepixels * 100.0 / effectivePixels;
+                return fullness_results;
+            }
+            finally
+            {
+                mask?.Dispose();
+                fullness_processimg.Dispose();
+            }
         }
         #endregion
 
