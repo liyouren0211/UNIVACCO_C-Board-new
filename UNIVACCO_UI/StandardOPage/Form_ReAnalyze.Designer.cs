@@ -45,7 +45,7 @@
             // 
             this.pictureBox_AreaImage.BackgroundImageLayout = System.Windows.Forms.ImageLayout.None;
             this.pictureBox_AreaImage.Location = new System.Drawing.Point(30, 57);
-            this.pictureBox_AreaImage.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
+            this.pictureBox_AreaImage.Margin = new System.Windows.Forms.Padding(2);
             this.pictureBox_AreaImage.Name = "pictureBox_AreaImage";
             this.pictureBox_AreaImage.Size = new System.Drawing.Size(291, 528);
             this.pictureBox_AreaImage.TabIndex = 0;
@@ -98,7 +98,7 @@
             this.label_Name.BorderStyle = System.Windows.Forms.BorderStyle.Fixed3D;
             this.label_Name.Font = new System.Drawing.Font("Microsoft JhengHei UI", 14F, System.Drawing.FontStyle.Bold);
             this.label_Name.ForeColor = System.Drawing.Color.White;
-            this.label_Name.Location = new System.Drawing.Point(38, 7);
+            this.label_Name.Location = new System.Drawing.Point(30, 8);
             this.label_Name.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.label_Name.Name = "label_Name";
             this.label_Name.Size = new System.Drawing.Size(291, 47);
@@ -225,7 +225,7 @@
             this.Controls.Add(this.button_Close);
             this.Controls.Add(this.button_Confirm);
             this.Controls.Add(this.pictureBox_AreaImage);
-            this.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
+            this.Margin = new System.Windows.Forms.Padding(2);
             this.Name = "Form_ReAnalyze";
             this.Text = "StandardO_ReAnalyze";
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox_AreaImage)).EndInit();
