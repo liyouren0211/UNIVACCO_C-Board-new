@@ -41,9 +41,10 @@
             // pictureBox_AreaImage
             // 
             this.pictureBox_AreaImage.BackgroundImageLayout = System.Windows.Forms.ImageLayout.None;
-            this.pictureBox_AreaImage.Location = new System.Drawing.Point(40, 71);
+            this.pictureBox_AreaImage.Location = new System.Drawing.Point(30, 57);
+            this.pictureBox_AreaImage.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
             this.pictureBox_AreaImage.Name = "pictureBox_AreaImage";
-            this.pictureBox_AreaImage.Size = new System.Drawing.Size(388, 660);
+            this.pictureBox_AreaImage.Size = new System.Drawing.Size(291, 455);
             this.pictureBox_AreaImage.TabIndex = 0;
             this.pictureBox_AreaImage.TabStop = false;
             // 
@@ -55,11 +56,11 @@
             this.button_Confirm.FlatAppearance.BorderSize = 0;
             this.button_Confirm.Font = new System.Drawing.Font("Microsoft JhengHei UI", 16F, System.Drawing.FontStyle.Bold);
             this.button_Confirm.ForeColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.button_Confirm.Location = new System.Drawing.Point(70, 845);
-            this.button_Confirm.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            this.button_Confirm.Location = new System.Drawing.Point(92, 590);
+            this.button_Confirm.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.button_Confirm.Name = "button_Confirm";
             this.button_Confirm.RightToLeft = System.Windows.Forms.RightToLeft.No;
-            this.button_Confirm.Size = new System.Drawing.Size(123, 66);
+            this.button_Confirm.Size = new System.Drawing.Size(92, 53);
             this.button_Confirm.TabIndex = 84;
             this.button_Confirm.Text = "確定";
             this.button_Confirm.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageAboveText;
@@ -75,11 +76,11 @@
             this.button_Close.FlatAppearance.BorderSize = 0;
             this.button_Close.Font = new System.Drawing.Font("Microsoft JhengHei UI", 16F, System.Drawing.FontStyle.Bold);
             this.button_Close.ForeColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.button_Close.Location = new System.Drawing.Point(247, 845);
-            this.button_Close.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            this.button_Close.Location = new System.Drawing.Point(190, 590);
+            this.button_Close.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.button_Close.Name = "button_Close";
             this.button_Close.RightToLeft = System.Windows.Forms.RightToLeft.No;
-            this.button_Close.Size = new System.Drawing.Size(123, 66);
+            this.button_Close.Size = new System.Drawing.Size(92, 53);
             this.button_Close.TabIndex = 85;
             this.button_Close.Text = "關閉";
             this.button_Close.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageAboveText;
@@ -94,9 +95,10 @@
             this.label_Name.BorderStyle = System.Windows.Forms.BorderStyle.Fixed3D;
             this.label_Name.Font = new System.Drawing.Font("Microsoft JhengHei UI", 14F, System.Drawing.FontStyle.Bold);
             this.label_Name.ForeColor = System.Drawing.Color.White;
-            this.label_Name.Location = new System.Drawing.Point(40, 9);
+            this.label_Name.Location = new System.Drawing.Point(30, 8);
+            this.label_Name.Margin = new System.Windows.Forms.Padding(2, 0, 2, 0);
             this.label_Name.Name = "label_Name";
-            this.label_Name.Size = new System.Drawing.Size(388, 59);
+            this.label_Name.Size = new System.Drawing.Size(291, 47);
             this.label_Name.TabIndex = 86;
             this.label_Name.TextAlign = System.Drawing.ContentAlignment.MiddleCenter;
             // 
@@ -108,11 +110,11 @@
             this.button_AddArea.FlatAppearance.BorderSize = 0;
             this.button_AddArea.Font = new System.Drawing.Font("Microsoft JhengHei UI", 16F, System.Drawing.FontStyle.Bold);
             this.button_AddArea.ForeColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.button_AddArea.Location = new System.Drawing.Point(140, 737);
-            this.button_AddArea.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            this.button_AddArea.Location = new System.Drawing.Point(110, 516);
+            this.button_AddArea.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.button_AddArea.Name = "button_AddArea";
             this.button_AddArea.RightToLeft = System.Windows.Forms.RightToLeft.No;
-            this.button_AddArea.Size = new System.Drawing.Size(165, 66);
+            this.button_AddArea.Size = new System.Drawing.Size(124, 53);
             this.button_AddArea.TabIndex = 87;
             this.button_AddArea.Text = "新增區域";
             this.button_AddArea.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageAboveText;
@@ -128,11 +130,11 @@
             this.button_SaveArea.FlatAppearance.BorderSize = 0;
             this.button_SaveArea.Font = new System.Drawing.Font("Microsoft JhengHei UI", 16F, System.Drawing.FontStyle.Bold);
             this.button_SaveArea.ForeColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.button_SaveArea.Location = new System.Drawing.Point(70, 737);
-            this.button_SaveArea.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            this.button_SaveArea.Location = new System.Drawing.Point(12, 516);
+            this.button_SaveArea.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.button_SaveArea.Name = "button_SaveArea";
             this.button_SaveArea.RightToLeft = System.Windows.Forms.RightToLeft.No;
-            this.button_SaveArea.Size = new System.Drawing.Size(123, 66);
+            this.button_SaveArea.Size = new System.Drawing.Size(92, 53);
             this.button_SaveArea.TabIndex = 88;
             this.button_SaveArea.Text = "儲存";
             this.button_SaveArea.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageAboveText;
@@ -149,11 +151,11 @@
             this.button_CancelArea.FlatAppearance.BorderSize = 0;
             this.button_CancelArea.Font = new System.Drawing.Font("Microsoft JhengHei UI", 16F, System.Drawing.FontStyle.Bold);
             this.button_CancelArea.ForeColor = System.Drawing.SystemColors.ActiveCaptionText;
-            this.button_CancelArea.Location = new System.Drawing.Point(247, 737);
-            this.button_CancelArea.Margin = new System.Windows.Forms.Padding(4, 3, 4, 3);
+            this.button_CancelArea.Location = new System.Drawing.Point(246, 516);
+            this.button_CancelArea.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.button_CancelArea.Name = "button_CancelArea";
             this.button_CancelArea.RightToLeft = System.Windows.Forms.RightToLeft.No;
-            this.button_CancelArea.Size = new System.Drawing.Size(123, 66);
+            this.button_CancelArea.Size = new System.Drawing.Size(92, 53);
             this.button_CancelArea.TabIndex = 89;
             this.button_CancelArea.Text = "取消";
             this.button_CancelArea.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageAboveText;
@@ -162,12 +164,12 @@
             this.button_CancelArea.Visible = false;
             this.button_CancelArea.Click += new System.EventHandler(this.button_CancelArea_Click);
             // 
-            // StandardO_ReAnalyze
+            // Form_ReAnalyze
             // 
-            this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 15F);
+            this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 12F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.SystemColors.GradientInactiveCaption;
-            this.ClientSize = new System.Drawing.Size(466, 923);
+            this.ClientSize = new System.Drawing.Size(350, 656);
             this.Controls.Add(this.button_CancelArea);
             this.Controls.Add(this.button_SaveArea);
             this.Controls.Add(this.button_AddArea);
@@ -175,7 +177,8 @@
             this.Controls.Add(this.button_Close);
             this.Controls.Add(this.button_Confirm);
             this.Controls.Add(this.pictureBox_AreaImage);
-            this.Name = "StandardO_ReAnalyze";
+            this.Margin = new System.Windows.Forms.Padding(2, 2, 2, 2);
+            this.Name = "Form_ReAnalyze";
             this.Text = "StandardO_ReAnalyze";
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox_AreaImage)).EndInit();
             this.ResumeLayout(false);

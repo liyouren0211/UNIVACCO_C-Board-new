@@ -15,7 +15,7 @@ namespace StandardOPage
     /// 字體區新對位分支 v15 的 C# / EmguCV 移植版。
     ///
     /// 對應 Python 主流程：
-    /// 1. Yin / Yang 固定二值化（Yin=150、Yang=150 並反相）
+    /// 1. Yin / Yang 固定二值化（Yin=150、Yang=230 並反相）
     /// 2. 3pt~12pt 固定參考範圍（總寬 3550）
     /// 3. 整條字體 0.5 倍 NCC 粗定位 start_x
     /// 4. 每一字級在預期位置 ±40 px 做局部 NCC
@@ -44,7 +44,7 @@ namespace StandardOPage
 
         private const int ReferenceWidth = 3550;
         private const int YinFixedThreshold = 150;
-        private const int YangFixedThreshold = 130;
+        private const int YangFixedThreshold = 150;
         private const int LocalAlignmentMaxShift = 40;
         private const int FineAlignmentMaxShift = 5;
         private const double CoarseScale = 0.5;
@@ -196,242 +196,6 @@ namespace StandardOPage
         }
 
         /// <summary>
-        /// Font v15 單一字級重新分析。
-        /// 人工框選區域是真正的「忽略區」：不計入缺燙/塞版，也不計入分母。
-        /// 重新分析仍使用與主流程相同的固定二值化與 ±5 px 精細 NCC 對位。
-        /// </summary>
-        public static (
-            Mat blockImg,
-            double blockPercentage,
-            Mat defectImg,
-            double defectPercentage,
-            FontInfo fontInfo) ReAnalyzeSingleFont(
-                Mat source,
-                string fontName,
-                bool isYin,
-                List<TemplateData> legacyTemplates,
-                IEnumerable<Region> excludedRegions,
-                string cardType,
-                OCT_Parameters_SaveOptions saveOptions)
-        {
-            if (source == null || source.IsEmpty)
-                throw new ArgumentException("Font v15 重新分析來源影像為空");
-
-            int index = Array.IndexOf(FontNames, fontName);
-            if (index < 0)
-                throw new ArgumentException("未知字級：" + fontName);
-
-            if (legacyTemplates == null || legacyTemplates.Count != FontNames.Length)
-                throw new ArgumentException("Template 數量錯誤，正常應為 10 張（3pt~12pt）");
-
-            string sideName = isYin ? "Yin" : "Yang";
-            int targetWidth = ReferenceX[index + 1] - ReferenceX[index];
-
-            Mat sourceGray = null;
-            Mat measuredGray = null;
-            Mat measuredBinary = null;
-            Mat templateGray = null;
-            Mat templateBinary = null;
-            Mat validMaskSource = null;
-            Mat validMask = null;
-            Mat alignedValidMask = null;
-            Mat rawDefect = null;
-            Mat rawBlock = null;
-            Mat defect = null;
-            Mat block = null;
-            Mat templateForegroundValid = null;
-            FineAlignResult fine = null;
-
-            try
-            {
-                sourceGray = ToGray(source);
-
-                templateGray = TryLoadHighResolutionTemplate(
-                    sideName,
-                    fontName,
-                    cardType,
-                    sourceGray.Height,
-                    targetWidth);
-
-                if (templateGray == null)
-                {
-                    templateGray = BuildCompatibilityGrayTemplate(
-                        legacyTemplates[index].Image,
-                        targetWidth,
-                        sourceGray.Height,
-                        isYin);
-                }
-
-                // 正常 v15 的 UI 原圖本來就是固定字級寬度；若碰到舊資料，做安全 Resize。
-                if (sourceGray.Width == targetWidth && sourceGray.Height == templateGray.Height)
-                {
-                    measuredGray = sourceGray.Clone();
-                }
-                else
-                {
-                    measuredGray = new Mat();
-                    CvInvoke.Resize(
-                        sourceGray,
-                        measuredGray,
-                        new Size(targetWidth, templateGray.Height),
-                        0, 0,
-                        Inter.Linear);
-                }
-
-                measuredBinary = FixedFontBinary(measuredGray, isYin);
-                templateBinary = FixedFontBinary(templateGray, isYin);
-
-                // 先在「使用者看到的原圖座標」建立有效遮罩，再縮放到 v15 比對尺寸。
-                validMaskSource = new Mat(source.Size, DepthType.Cv8U, 1);
-                validMaskSource.SetTo(new MCvScalar(255));
-                if (excludedRegions != null)
-                {
-                    foreach (Region region in excludedRegions)
-                    {
-                        if (region?.Contour == null || region.Contour.Size < 3)
-                            continue;
-                        using (var contours = new Emgu.CV.Util.VectorOfVectorOfPoint(region.Contour))
-                        {
-                            CvInvoke.FillPoly(validMaskSource, contours, new MCvScalar(0));
-                        }
-                    }
-                }
-
-                if (validMaskSource.Size == measuredBinary.Size)
-                {
-                    validMask = validMaskSource.Clone();
-                }
-                else
-                {
-                    validMask = new Mat();
-                    CvInvoke.Resize(
-                        validMaskSource,
-                        validMask,
-                        measuredBinary.Size,
-                        0, 0,
-                        Inter.Nearest);
-                }
-
-                fine = FineAlignBinary(measuredBinary, templateBinary, FineAlignmentMaxShift);
-                alignedValidMask = AlignMaskWithFineShift(
-                    validMask,
-                    templateBinary.Size,
-                    FineAlignmentMaxShift,
-                    fine.ShiftX,
-                    fine.ShiftY);
-
-                rawDefect = BuildDefectImage(fine.Aligned, templateBinary);
-                rawBlock = BuildBlockImage(fine.Aligned, templateBinary);
-                defect = new Mat();
-                block = new Mat();
-                CvInvoke.BitwiseAnd(rawDefect, alignedValidMask, defect);
-                CvInvoke.BitwiseAnd(rawBlock, alignedValidMask, block);
-
-                templateForegroundValid = new Mat();
-                CvInvoke.BitwiseAnd(templateBinary, alignedValidMask, templateForegroundValid);
-
-                int defectPixels = CountWhitePixels(defect);
-                int blockPixels = CountWhitePixels(block);
-                int foregroundPixels = CountWhitePixels(templateForegroundValid);
-                int validPixels = CountWhitePixels(alignedValidMask);
-                int backgroundPixels = Math.Max(0, validPixels - foregroundPixels);
-
-                double defectPercentage = foregroundPixels <= 0
-                    ? 0.0
-                    : defectPixels * 100.0 / foregroundPixels;
-                double blockPercentage = backgroundPixels <= 0
-                    ? 0.0
-                    : blockPixels * 100.0 / backgroundPixels;
-
-                FontInfo fontInfo = new FontInfo
-                {
-                    Fontname = fontName,
-                    Bounds = new Rectangle(0, 0, source.Width, source.Height),
-                    Defect_Pixels = defectPixels,
-                    Block_Pixels = blockPixels,
-                    TemplateForegroundPixels = foregroundPixels,
-                    TemplateBackgroundPixels = backgroundPixels
-                };
-
-                if (ShouldSaveDebug(saveOptions))
-                {
-                    SaveSingleReAnalyzeDebug(
-                        sideName,
-                        fontName,
-                        sourceGray,
-                        measuredBinary,
-                        templateBinary,
-                        validMask,
-                        alignedValidMask,
-                        fine.Aligned,
-                        defect,
-                        block,
-                        fine.Score,
-                        fine.ShiftX,
-                        fine.ShiftY,
-                        defectPercentage,
-                        blockPercentage);
-                }
-
-                Mat retBlock = block;
-                Mat retDefect = defect;
-                block = null;
-                defect = null;
-                return (retBlock, blockPercentage, retDefect, defectPercentage, fontInfo);
-            }
-            finally
-            {
-                sourceGray?.Dispose();
-                measuredGray?.Dispose();
-                measuredBinary?.Dispose();
-                templateGray?.Dispose();
-                templateBinary?.Dispose();
-                validMaskSource?.Dispose();
-                validMask?.Dispose();
-                alignedValidMask?.Dispose();
-                rawDefect?.Dispose();
-                rawBlock?.Dispose();
-                defect?.Dispose();
-                block?.Dispose();
-                templateForegroundValid?.Dispose();
-                fine?.Dispose();
-            }
-        }
-
-        /// <summary>
-        /// 依 FontInfo 中目前有效像素重新計算 v15 的整體缺燙/塞版百分比。
-        /// 可正確反映多次重新分析後，不同字級各自的人工排除區。
-        /// </summary>
-        public static void RecalculateTotals(
-            Font_Results defectResults,
-            Font_Results blockResults,
-            List<FontInfo> fontInfos)
-        {
-            if (defectResults == null || blockResults == null || fontInfos == null)
-                return;
-
-            long defectPixels = 0;
-            long blockPixels = 0;
-            long foregroundPixels = 0;
-            long backgroundPixels = 0;
-
-            foreach (FontInfo info in fontInfos)
-            {
-                if (info == null) continue;
-                defectPixels += Math.Max(0, info.Defect_Pixels);
-                blockPixels += Math.Max(0, info.Block_Pixels);
-                foregroundPixels += Math.Max(0, info.TemplateForegroundPixels);
-                backgroundPixels += Math.Max(0, info.TemplateBackgroundPixels);
-            }
-
-            if (foregroundPixels > 0)
-                defectResults.Defect_Total_Percentage = defectPixels * 100.0 / foregroundPixels;
-
-            if (backgroundPixels > 0)
-                blockResults.Block_Total_Percentage = blockPixels * 100.0 / backgroundPixels;
-        }
-
-        /// <summary>
         /// 回傳：OriginalImgs, BlockImgs, BlockResults, DefectImgs, DefectResults, FontInfos
         /// </summary>
         private static (
@@ -557,9 +321,7 @@ namespace StandardOPage
                             seg.ExpectedX2 - seg.ExpectedX1,
                             area.Height),
                         Block_Pixels = seg.BlockPixels,
-                        Defect_Pixels = seg.DefectPixels,
-                        TemplateForegroundPixels = seg.TemplateForegroundPixels,
-                        TemplateBackgroundPixels = seg.TemplateBackgroundPixels
+                        Defect_Pixels = seg.DefectPixels
                     });
 
                     totalDefectPixels += seg.DefectPixels;
@@ -779,90 +541,6 @@ namespace StandardOPage
             }
         }
 
-        private static Mat AlignMaskWithFineShift(
-            Mat validMask,
-            Size targetSize,
-            int maxShift,
-            int shiftX,
-            int shiftY)
-        {
-            Mat padded = new Mat(
-                new Size(validMask.Width + maxShift * 2, validMask.Height + maxShift * 2),
-                DepthType.Cv8U,
-                1);
-            padded.SetTo(new MCvScalar(0));
-            try
-            {
-                using (Mat center = new Mat(
-                    padded,
-                    new Rectangle(maxShift, maxShift, validMask.Width, validMask.Height)))
-                {
-                    validMask.CopyTo(center);
-                }
-
-                int x = maxShift + shiftX;
-                int y = maxShift + shiftY;
-                x = Math.Max(0, Math.Min(x, padded.Width - targetSize.Width));
-                y = Math.Max(0, Math.Min(y, padded.Height - targetSize.Height));
-
-                return new Mat(
-                    padded,
-                    new Rectangle(x, y, targetSize.Width, targetSize.Height)).Clone();
-            }
-            finally
-            {
-                padded.Dispose();
-            }
-        }
-
-        private static void SaveSingleReAnalyzeDebug(
-            string sideName,
-            string fontName,
-            Mat inputGray,
-            Mat inputBinary,
-            Mat templateBinary,
-            Mat validMask,
-            Mat alignedValidMask,
-            Mat aligned,
-            Mat defect,
-            Mat block,
-            double score,
-            int shiftX,
-            int shiftY,
-            double defectPercentage,
-            double blockPercentage)
-        {
-            string root = Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "FontV15_Debug",
-                "ReAnalyze",
-                sideName,
-                fontName);
-            Directory.CreateDirectory(root);
-
-            CvInvoke.Imwrite(Path.Combine(root, "00_input_gray.bmp"), inputGray);
-            CvInvoke.Imwrite(Path.Combine(root, "01_input_binary.bmp"), inputBinary);
-            CvInvoke.Imwrite(Path.Combine(root, "02_template_binary.bmp"), templateBinary);
-            CvInvoke.Imwrite(Path.Combine(root, "03_valid_mask_before_align.bmp"), validMask);
-            CvInvoke.Imwrite(Path.Combine(root, "04_valid_mask_aligned.bmp"), alignedValidMask);
-            CvInvoke.Imwrite(Path.Combine(root, "05_aligned.bmp"), aligned);
-            CvInvoke.Imwrite(Path.Combine(root, "06_defect.bmp"), defect);
-            CvInvoke.Imwrite(Path.Combine(root, "07_block.bmp"), block);
-
-            using (StreamWriter writer = new StreamWriter(
-                Path.Combine(root, "reanalysis.txt"),
-                false,
-                System.Text.Encoding.UTF8))
-            {
-                writer.WriteLine("side=" + sideName);
-                writer.WriteLine("font=" + fontName);
-                writer.WriteLine("score=" + score.ToString("F6"));
-                writer.WriteLine("shift=(" + shiftX + "," + shiftY + ")");
-                writer.WriteLine("defect_pct=" + defectPercentage.ToString("F6"));
-                writer.WriteLine("block_pct=" + blockPercentage.ToString("F6"));
-            }
-        }
-
         private static Mat BuildFullStripTemplate(
             string sideName,
             string cardType,
@@ -923,19 +601,6 @@ namespace StandardOPage
             return full;
         }
 
-        private static string GetProjectDataRoot()
-        {
-            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            DirectoryInfo current = new DirectoryInfo(baseDir);
-            while (current != null)
-            {
-                if (File.Exists(Path.Combine(current.FullName, "UNIVACCO_UI.csproj")))
-                    return current.FullName;
-                current = current.Parent;
-            }
-            return baseDir;
-        }
-
         private static Mat TryLoadHighResolutionTemplate(
             string sideName,
             string fontName,
@@ -944,17 +609,11 @@ namespace StandardOPage
             int expectedWidth)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string projectDataRoot = GetProjectDataRoot();
             string filename = sideName + "_template_" + fontName + ".bmp";
             string safeCardType = string.IsNullOrWhiteSpace(cardType) ? "白卡" : cardType.Trim();
 
             string[] candidates =
             {
-                // 正式 Git 金樣本位置
-                Path.Combine(projectDataRoot, "font_v15_templates", safeCardType, filename),
-                Path.Combine(projectDataRoot, "font_v15_templates", filename),
-                Path.Combine(projectDataRoot, "baseline_test", "templates", filename),
-                // 舊版 / 單獨 EXE 部署相容
                 Path.Combine(baseDir, "font_v15_templates", safeCardType, filename),
                 Path.Combine(baseDir, "font_v15_templates", filename),
                 Path.Combine(baseDir, "baseline_test", "templates", filename)
@@ -1324,7 +983,7 @@ namespace StandardOPage
         {
             string safeCardType = string.IsNullOrWhiteSpace(cardType) ? "白卡" : cardType.Trim();
             string dir = Path.Combine(
-                GetProjectDataRoot(),
+                AppDomain.CurrentDomain.BaseDirectory,
                 "font_v15_templates",
                 safeCardType);
             Directory.CreateDirectory(dir);

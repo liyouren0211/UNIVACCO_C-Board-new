@@ -60,7 +60,7 @@ namespace UNIVACCO_UI
         // false = 手動固定 Threshold
         // true  = 自動 Otsu + 線性補償
         public bool AutoMeshThresholdEnabled = false;
-      
+
 
         // 模板宣告
         public List<TemplateData> YinTemplates = new List<TemplateData>();  // 陰版模版
@@ -162,16 +162,53 @@ namespace UNIVACCO_UI
             }
         }
 
+        /// <summary>
+        /// 取得專案資料根目錄。
+        /// 開發環境由 bin\x64\Debug / Release 往上尋找 UNIVACCO_UI.csproj，
+        /// 讓金樣本可以正式放在 UNIVACCO_UI\templates 並由 Git 追蹤。
+        /// 若是只有 EXE 的部署環境，則退回 EXE 所在資料夾，維持舊版相容。
+        /// </summary>
+        private string GetProjectDataRoot()
+        {
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            DirectoryInfo current = new DirectoryInfo(baseDir);
+
+            while (current != null)
+            {
+                if (File.Exists(Path.Combine(current.FullName, "UNIVACCO_UI.csproj")))
+                    return current.FullName;
+
+                current = current.Parent;
+            }
+
+            return baseDir;
+        }
+
         private void LoadTemplates(string cardType)
         {
             string templatesDir = cardType == "雙銅"
                 ? "template_double sided coated paper"
                 : "template_white card";
+
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string fullTemplatesDir = Path.Combine(baseDir, templatesDir);
+            string projectDataRoot = GetProjectDataRoot();
+
+            // 新正式位置：優先從專案根目錄讀取，這些金樣本可以正常 Git push。
+            string fullTemplatesDir = Path.Combine(projectDataRoot, templatesDir);
 
             if (!Directory.Exists(fullTemplatesDir))
-                fullTemplatesDir = Path.Combine(baseDir, "templates");
+                fullTemplatesDir = Path.Combine(projectDataRoot, "templates");
+
+            // 舊版相容：若專案根目錄沒有模板，才回頭讀 bin / EXE 同層資料夾。
+            if (!Directory.Exists(fullTemplatesDir))
+            {
+                fullTemplatesDir = Path.Combine(baseDir, templatesDir);
+
+                if (!Directory.Exists(fullTemplatesDir))
+                    fullTemplatesDir = Path.Combine(baseDir, "templates");
+            }
+
+            Debug.WriteLine($"[Template] 金樣本讀取路徑：{fullTemplatesDir}");
 
             YinTemplates.Clear();
             YangTemplates.Clear();
@@ -1312,27 +1349,41 @@ namespace UNIVACCO_UI
                     MeshP_Results = OCT_AlgorithmHelper.Evaluate_MeshP(OCT_Rules, MeshP_Results);
                     Update_MeshP(MeshP_Imgs, MeshP_Results);
                 }
-                catch (Exception) { return; }
+                catch (Exception ex)
+                {
+                    OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, $"重新計算網點區失敗：{ex.Message}");
+                    return;
+                }
             }
             else if (single_area_info.Type == "yin")
             {
                 try
                 {
-                    (Yin_Imgs, Yin_Block_Imgs, Yin_Block_Results, Yin_Defect_Imgs, Yin_Defect_Results, Yin_Font_Infos) = OCT_AlgorithmHelper.Single_Yin_analz(Yin_Imgs, Yin_Block_Imgs, Yin_Block_Results, Yin_Defect_Imgs, Yin_Defect_Results, single_area_info, CurrentCardType_Params, Yin_Font_Infos, YinTemplates, SaveOptions);
+                    string selectedCardType = comboBox_CardType.SelectedItem?.ToString() ?? "白卡";
+                    (Yin_Imgs, Yin_Block_Imgs, Yin_Block_Results, Yin_Defect_Imgs, Yin_Defect_Results, Yin_Font_Infos) = OCT_AlgorithmHelper.Single_Yin_analz(Yin_Imgs, Yin_Block_Imgs, Yin_Block_Results, Yin_Defect_Imgs, Yin_Defect_Results, single_area_info, CurrentCardType_Params, Yin_Font_Infos, YinTemplates, SaveOptions, selectedCardType);
                     (Yin_Defect_Results, Yin_Block_Results) = OCT_AlgorithmHelper.Evaluate_Yin(OCT_Rules, Yin_Defect_Results, Yin_Block_Results);
                     Update_Yin(Yin_Defect_Results, Yin_Block_Results);
                 }
-                catch (Exception) { return; }
+                catch (Exception ex)
+                {
+                    OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, $"重新計算陰版 FontV15 失敗：{ex.Message}");
+                    return;
+                }
             }
             else if (single_area_info.Type == "yang")
             {
                 try
                 {
-                    (Yang_Imgs, Yang_Block_Imgs, Yang_Block_Results, Yang_Defect_Imgs, Yang_Defect_Results, Yang_Font_Infos) = OCT_AlgorithmHelper.Single_Yang_analz(Yang_Imgs, Yang_Block_Imgs, Yang_Block_Results, Yang_Defect_Imgs, Yang_Defect_Results, single_area_info, CurrentCardType_Params, Yang_Font_Infos, YangTemplates, SaveOptions);
+                    string selectedCardType = comboBox_CardType.SelectedItem?.ToString() ?? "白卡";
+                    (Yang_Imgs, Yang_Block_Imgs, Yang_Block_Results, Yang_Defect_Imgs, Yang_Defect_Results, Yang_Font_Infos) = OCT_AlgorithmHelper.Single_Yang_analz(Yang_Imgs, Yang_Block_Imgs, Yang_Block_Results, Yang_Defect_Imgs, Yang_Defect_Results, single_area_info, CurrentCardType_Params, Yang_Font_Infos, YangTemplates, SaveOptions, selectedCardType);
                     (Yang_Defect_Results, Yang_Block_Results) = OCT_AlgorithmHelper.Evaluate_Yang(OCT_Rules, Yang_Defect_Results, Yang_Block_Results);
                     Update_Yang(Yang_Defect_Results, Yang_Block_Results);
                 }
-                catch (Exception) { return; }
+                catch (Exception ex)
+                {
+                    OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, $"重新計算陽版 FontV15 失敗：{ex.Message}");
+                    return;
+                }
             }
             else if (single_area_info.Type == "fullness")
             {
@@ -1574,6 +1625,11 @@ namespace UNIVACCO_UI
             for (int i = 0; i < label_Selectors.Count; i++)
             {
                 label_Selectors[i].BackColor = Color.Gray;
+
+                // 每次完整分析都會再次執行本方法；先解除再綁定，避免 Click/Mouse 事件累積。
+                label_Selectors[i].MouseEnter -= Label_MouseEnter;
+                label_Selectors[i].MouseLeave -= Label_MouseLeave;
+                label_Selectors[i].Click -= Label_Click;
                 label_Selectors[i].MouseEnter += Label_MouseEnter;
                 label_Selectors[i].MouseLeave += Label_MouseLeave;
                 label_Selectors[i].Tag = new SingleAreaInfo()

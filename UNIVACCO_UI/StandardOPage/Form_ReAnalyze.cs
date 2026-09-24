@@ -1,227 +1,362 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.ComponentModel;
-using System.Data;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
-using System.Windows.Forms.VisualStyles;
 using Emgu.CV;
 using Emgu.CV.Util;
-using NPOI.SS.Formula.Functions;
-using Excel = Microsoft.Office.Interop.Excel;
 
 namespace StandardOPage
 {
     public partial class Form_ReAnalyze : Form
     {
-        SingleAreaInfo SingleAreaInfo;
-        private float zoomFactor = 1.0f; // 縮放比例
-        private Point offset = new Point(0, 0); // 平移偏移量
-        private Point panStartPoint; // 拖動起點
-        private bool isPanning = false; // 是否正在拖動
-        private List<Point> tempPoints = new List<Point>();
+        private readonly SingleAreaInfo SingleAreaInfo;
+
+        private float zoomFactor = 1.0f;
+        private Point offset = new Point(0, 0);
+        private Point panStartPoint;
+        private bool isPanning = false;
+        private bool isAddingArea = false;
+
+        private readonly List<Point> tempPoints = new List<Point>();
+        private Bitmap displayImage;
+        private List<Region> workingRegions;
+        private readonly Stack<List<Point[]>> editHistory = new Stack<List<Point[]>>();
+        private int selectedRegionIndex = -1;
+
+        private Button button_DeleteRegion;
+        private Button button_ClearAll;
+        private Button button_Undo;
+
+        // 這些位置由 Designer 已完成 DPI/字型縮放後的既有控制項取得，
+        // 不再使用 737 這種固定座標，避免不同 Windows 顯示比例時按鈕跑出視窗。
+        private int editRowY;
+        private int editRowHeight;
+
         public Form_ReAnalyze(SingleAreaInfo _SingleAreaInfo)
         {
             InitializeComponent();
-            SingleAreaInfo = _SingleAreaInfo;
+            SingleAreaInfo = _SingleAreaInfo ?? throw new ArgumentNullException(nameof(_SingleAreaInfo));
+
+            // 先記住 Designer 控制項經過 WinForms AutoScale 後的實際位置。
+            // button_AddArea 是原本 Designer 就有的控制項，因此它的位置可當作可靠的編輯列基準。
+            editRowY = button_AddArea.Top;
+            editRowHeight = button_AddArea.Height;
+
+            // 不直接修改 Label.Tag 裡真正的 Regions。
+            // 使用者只有按「確定」時才提交；按關閉 / X 都會放棄本次修改。
+            workingRegions = CloneRegions(SingleAreaInfo.Regions);
+
             LoadUI(SingleAreaInfo);
+            InitializeEditButtons();
+
             pictureBox_AreaImage.MouseWheel += PictureBox_AreaImage_MouseWheel;
             pictureBox_AreaImage.MouseDown += PictureBox_AreaImage_MouseDown;
             pictureBox_AreaImage.MouseMove += PictureBox_AreaImage_MouseMove;
             pictureBox_AreaImage.MouseUp += PictureBox_AreaImage_MouseUp;
+            pictureBox_AreaImage.MouseClick += PictureBox_AreaImage_SelectRegion;
+
+            // Paint 只綁這一個入口，避免舊版 Paint_TempArea / Paint_SaveArea 重複繪製。
             pictureBox_AreaImage.Paint += PictureBox_AreaImage_Paint;
+            FormClosed += Form_ReAnalyze_FormClosed;
 
             SetInitialImageDisplay();
+            SetEditingMode(false);
         }
+
         public void AddEvent()
         {
+            // 保留舊介面；事件已在建構式統一綁定。
+        }
 
-        }
-        public void LoadUI(SingleAreaInfo SingleAreaInfo)
+        public void LoadUI(SingleAreaInfo singleAreaInfo)
         {
-            label_Name.Text = SingleAreaInfo.Label_Name;
-            pictureBox_AreaImage.Image = SingleAreaInfo.Image.ToBitmap();
+            label_Name.Text = singleAreaInfo.Label_Name;
+            displayImage?.Dispose();
+            displayImage = singleAreaInfo.Image.ToBitmap();
+            // PictureBox 本身不再持有 Image，避免控制項預設繪製 + Paint 自繪造成重複繪圖。
+            pictureBox_AreaImage.Image = null;
         }
+
+        private void InitializeEditButtons()
+        {
+            // 新按鈕在執行期建立，但位置不能硬寫死，因為 Designer 控制項會受
+            // Windows DPI / 字型縮放影響。位置一律由目前實際 ClientSize 與
+            // 原本 button_AddArea 的縮放後位置動態計算。
+            button_DeleteRegion = CreateEditButton("刪除選取");
+            button_DeleteRegion.Click += button_DeleteRegion_Click;
+            Controls.Add(button_DeleteRegion);
+
+            button_ClearAll = CreateEditButton("全部清除");
+            button_ClearAll.Click += button_ClearAll_Click;
+            Controls.Add(button_ClearAll);
+
+            button_Undo = CreateEditButton("上一步");
+            button_Undo.Click += button_Undo_Click;
+            Controls.Add(button_Undo);
+
+            LayoutEditButtons();
+        }
+
+        private Button CreateEditButton(string text)
+        {
+            return new Button
+            {
+                BackColor = SystemColors.ControlLight,
+                FlatStyle = FlatStyle.Standard,
+                Font = new Font("Microsoft JhengHei UI", 9.5F, FontStyle.Bold),
+                ForeColor = SystemColors.ActiveCaptionText,
+                Text = text,
+                UseVisualStyleBackColor = false,
+                Anchor = AnchorStyles.Bottom
+            };
+        }
+
+        /// <summary>
+        /// 依目前實際視窗尺寸排列 ReAnalyze 編輯列。
+        /// 不使用固定 X/Y，因此 100%、125%、150% DPI 都不會把按鈕排到視窗外。
+        /// </summary>
+        private void LayoutEditButtons()
+        {
+            int left = Math.Max(8, label_Name.Left);
+            int right = Math.Min(ClientSize.Width - 8, label_Name.Right);
+            if (right <= left)
+            {
+                left = 8;
+                right = ClientSize.Width - 8;
+            }
+
+            int gap = Math.Max(4, (int)Math.Round(6.0 * DeviceDpi / 96.0));
+            int rowHeight = Math.Max(38, editRowHeight);
+
+            // 編輯列永遠放在影像下方、確定/關閉上方。
+            int minY = pictureBox_AreaImage.Bottom + gap;
+            int maxY = button_Confirm.Top - rowHeight - gap;
+            int y = editRowY;
+            if (maxY >= minY)
+                y = Math.Max(minY, Math.Min(y, maxY));
+            else
+                y = Math.Max(0, Math.Min(y, ClientSize.Height - rowHeight));
+
+            if (!isAddingArea)
+            {
+                int totalWidth = Math.Max(4, right - left);
+                int buttonWidth = Math.Max(50, (totalWidth - gap * 3) / 4);
+
+                button_AddArea.SetBounds(left, y, buttonWidth, rowHeight);
+                button_DeleteRegion.SetBounds(left + (buttonWidth + gap), y, buttonWidth, rowHeight);
+                button_ClearAll.SetBounds(left + 2 * (buttonWidth + gap), y, buttonWidth, rowHeight);
+                button_Undo.SetBounds(left + 3 * (buttonWidth + gap), y, buttonWidth, rowHeight);
+
+                // 四顆按鈕要塞在同一列，原本 16pt 在較高 DPI 會太大。
+                button_AddArea.Font = new Font("Microsoft JhengHei UI", 9.5F, FontStyle.Bold);
+                button_DeleteRegion.Font = button_AddArea.Font;
+                button_ClearAll.Font = button_AddArea.Font;
+                button_Undo.Font = button_AddArea.Font;
+            }
+            else
+            {
+                int totalWidth = Math.Max(3, right - left);
+                int buttonWidth = Math.Max(60, (totalWidth - gap * 2) / 3);
+
+                button_SaveArea.SetBounds(left, y, buttonWidth, rowHeight);
+                button_Undo.SetBounds(left + (buttonWidth + gap), y, buttonWidth, rowHeight);
+                button_CancelArea.SetBounds(left + 2 * (buttonWidth + gap), y, buttonWidth, rowHeight);
+
+                button_SaveArea.Font = new Font("Microsoft JhengHei UI", 10.5F, FontStyle.Bold);
+                button_Undo.Font = button_SaveArea.Font;
+                button_CancelArea.Font = button_SaveArea.Font;
+            }
+
+            button_AddArea.BringToFront();
+            button_DeleteRegion.BringToFront();
+            button_ClearAll.BringToFront();
+            button_Undo.BringToFront();
+            button_SaveArea.BringToFront();
+            button_CancelArea.BringToFront();
+        }
+
+        private void SetEditingMode(bool editing)
+        {
+            isAddingArea = editing;
+
+            button_AddArea.Visible = !editing;
+            button_DeleteRegion.Visible = !editing;
+            button_ClearAll.Visible = !editing;
+            button_Undo.Visible = true;
+
+            button_SaveArea.Visible = editing;
+            button_CancelArea.Visible = editing;
+            button_Confirm.Visible = !editing;
+            button_Close.Visible = !editing;
+
+            LayoutEditButtons();
+        }
+
         private void button_Close_Click(object sender, EventArgs e)
         {
-            this.Close();
+            DialogResult = DialogResult.Cancel;
+            Close();
         }
+
         private void button_Confirm_Click(object sender, EventArgs e)
         {
             ValidateAllAreas();
-            this.DialogResult = DialogResult.OK;
-            this.Close();
+            CommitWorkingRegions();
+            DialogResult = DialogResult.OK;
+            Close();
         }
+
         private void button_AddArea_Click(object sender, EventArgs e)
         {
-            button_CancelArea.Visible = true;
-            button_SaveArea.Visible = true;
-            button_AddArea.Visible = false;
-            button_Confirm.Visible = false;
-            button_Close.Visible = false;
-            // 清空臨時點列表
             tempPoints.Clear();
-
-            // 添加滑鼠左鍵點擊事件來新增點
-            pictureBox_AreaImage.MouseClick += PictureBox_AreaImage_AddPoint;
-
-            // 添加繪製臨時點的事件
-            pictureBox_AreaImage.Paint -= Paint_SaveArea; // 先移除原來的Paint事件
-            pictureBox_AreaImage.Paint += Paint_TempArea; // 添加新的Paint事件
-
-        }
-        private void button_CancelArea_Click(object sender, EventArgs e)
-        {
-            button_CancelArea.Visible = false;
-            button_SaveArea.Visible = false;
-            button_AddArea.Visible = true;
-            button_Confirm.Visible = true;
-            button_Close.Visible = true;
-            // 清空臨時點列表
-            tempPoints.Clear();
-
-            // 移除臨時事件
+            selectedRegionIndex = -1;
             pictureBox_AreaImage.MouseClick -= PictureBox_AreaImage_AddPoint;
-            pictureBox_AreaImage.Paint -= Paint_TempArea;
-            pictureBox_AreaImage.Paint += Paint_SaveArea;
-
-            // 重繪
+            pictureBox_AreaImage.MouseClick += PictureBox_AreaImage_AddPoint;
+            SetEditingMode(true);
             pictureBox_AreaImage.Invalidate();
         }
+
+        private void button_CancelArea_Click(object sender, EventArgs e)
+        {
+            tempPoints.Clear();
+            pictureBox_AreaImage.MouseClick -= PictureBox_AreaImage_AddPoint;
+            SetEditingMode(false);
+            pictureBox_AreaImage.Invalidate();
+        }
+
         private void button_SaveArea_Click(object sender, EventArgs e)
         {
-            button_CancelArea.Visible = false;
-            button_SaveArea.Visible = false;
-            button_AddArea.Visible = true;
-            button_Confirm.Visible = true;
-            button_Close.Visible = true;
-
-            // 移除臨時事件
             pictureBox_AreaImage.MouseClick -= PictureBox_AreaImage_AddPoint;
-            pictureBox_AreaImage.Paint -= Paint_TempArea;
-            pictureBox_AreaImage.Paint += Paint_SaveArea;
 
-            // 只有當有足夠的點才保存
             if (tempPoints.Count >= 3)
             {
+                PushHistory();
                 var contour = new VectorOfPoint(tempPoints.ToArray());
                 double area = Math.Abs(CvInvoke.ContourArea(contour));
-
-                SingleAreaInfo.Regions.Add(new Region
+                workingRegions.Add(new Region
                 {
                     Contour = contour,
                     Area = area
                 });
-
+                selectedRegionIndex = workingRegions.Count - 1;
+            }
+            else
+            {
+                MessageBox.Show("至少需要 3 個點才能建立排除區域。", "排除區域", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
 
-            // 清空臨時點列表
             tempPoints.Clear();
-
-            // 重繪
+            SetEditingMode(false);
             pictureBox_AreaImage.Invalidate();
-
         }
 
-
-
-        #region 基礎滑動
-        // 當圖片載入時設定初始縮放比例
-        private void SetInitialImageDisplay()
+        private void button_DeleteRegion_Click(object sender, EventArgs e)
         {
-            if (pictureBox_AreaImage.Image == null)
+            if (selectedRegionIndex < 0 || selectedRegionIndex >= workingRegions.Count)
+            {
+                MessageBox.Show("請先在圖片上點選要刪除的紅框。", "刪除區域", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            PushHistory();
+            Region region = workingRegions[selectedRegionIndex];
+            region?.Contour?.Dispose();
+            workingRegions.RemoveAt(selectedRegionIndex);
+            selectedRegionIndex = -1;
+            pictureBox_AreaImage.Invalidate();
+        }
+
+        private void button_ClearAll_Click(object sender, EventArgs e)
+        {
+            if (workingRegions.Count == 0)
                 return;
 
-            // 獲取圖片的尺寸與 PictureBox 的尺寸
-            float imgWidth = pictureBox_AreaImage.Image.Width;
-            float imgHeight = pictureBox_AreaImage.Image.Height;
+            if (MessageBox.Show(
+                    "確定要清除目前所有排除區域嗎？\n按『上一步』仍可復原。",
+                    "全部清除",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            PushHistory();
+            DisposeRegions(workingRegions);
+            workingRegions = new List<Region>();
+            selectedRegionIndex = -1;
+            pictureBox_AreaImage.Invalidate();
+        }
+
+        private void button_Undo_Click(object sender, EventArgs e)
+        {
+            // 畫多邊形期間：「上一步」= 移除上一個點。
+            if (isAddingArea)
+            {
+                if (tempPoints.Count > 0)
+                {
+                    tempPoints.RemoveAt(tempPoints.Count - 1);
+                    pictureBox_AreaImage.Invalidate();
+                }
+                return;
+            }
+
+            // 一般模式：「上一步」= 復原上一個新增/刪除/全部清除動作。
+            if (editHistory.Count == 0)
+                return;
+
+            RestoreSnapshot(editHistory.Pop());
+            selectedRegionIndex = -1;
+            pictureBox_AreaImage.Invalidate();
+        }
+
+        #region 基礎滑動 / 縮放 / 繪圖
+
+        private void SetInitialImageDisplay()
+        {
+            if (displayImage == null)
+                return;
+
+            float imgWidth = displayImage.Width;
+            float imgHeight = displayImage.Height;
             float boxWidth = pictureBox_AreaImage.Width;
             float boxHeight = pictureBox_AreaImage.Height;
 
-            // 使用與滾輪事件中相同的最小縮放比例計算方法
             zoomFactor = Math.Max(
-                (float)pictureBox_AreaImage.Width / pictureBox_AreaImage.Image.Width,
-                (float)pictureBox_AreaImage.Height / pictureBox_AreaImage.Image.Height
-            );
+                boxWidth / imgWidth,
+                boxHeight / imgHeight);
 
-            // 計算初始的偏移量，讓圖片居中顯示
             offset.X = (int)((boxWidth - imgWidth * zoomFactor) / 2);
             offset.Y = (int)((boxHeight - imgHeight * zoomFactor) / 2);
-
-            pictureBox_AreaImage.Invalidate(); // 重繪畫面
+            pictureBox_AreaImage.Invalidate();
         }
-
 
         private void PictureBox_AreaImage_MouseWheel(object sender, MouseEventArgs e)
         {
-            if (pictureBox_AreaImage.Image == null) return; // 如果圖片為空，直接返回
+            if (displayImage == null)
+                return;
 
-            float oldZoomFactor = zoomFactor;
             float zoomIncrement = 0.1f;
-
-            // 計算最小縮放比例，確保圖片能完全填滿 PictureBox
             float minZoomFactor = Math.Max(
-                (float)pictureBox_AreaImage.Width / pictureBox_AreaImage.Image.Width,
-                (float)pictureBox_AreaImage.Height / pictureBox_AreaImage.Image.Height
-            );
+                (float)pictureBox_AreaImage.Width / displayImage.Width,
+                (float)pictureBox_AreaImage.Height / displayImage.Height);
 
-            // 計算 PictureBox 中滑鼠指針對應的圖片座標
             float mouseX = (e.X - offset.X) / zoomFactor;
             float mouseY = (e.Y - offset.Y) / zoomFactor;
 
-            // 更新縮放比例
-            if (e.Delta > 0) // 滾輪向上：放大
-            {
+            if (e.Delta > 0)
                 zoomFactor += zoomIncrement;
-            }
-            else if (e.Delta < 0) // 滾輪向下：縮小
-            {
+            else if (e.Delta < 0)
                 zoomFactor -= zoomIncrement;
-            }
 
-            // 限制縮放比例不能小於 minZoomFactor
             zoomFactor = Math.Max(zoomFactor, minZoomFactor);
-
-            // 計算新的偏移量，保持縮放中心不變
             offset.X = (int)(e.X - mouseX * zoomFactor);
             offset.Y = (int)(e.Y - mouseY * zoomFactor);
 
-            // 確保縮小時圖像不會有空白區域
-            int imageWidth = (int)(pictureBox_AreaImage.Image.Width * zoomFactor);
-            int imageHeight = (int)(pictureBox_AreaImage.Image.Height * zoomFactor);
-
-            // 如果縮放後的圖像小於 PictureBox，則居中顯示
-            if (imageWidth < pictureBox_AreaImage.Width)
-            {
-                offset.X = (pictureBox_AreaImage.Width - imageWidth) / 2;
-            }
-            else
-            {
-                // 確保左邊界不會出現空白
-                offset.X = Math.Min(offset.X, 0);
-                // 確保右邊界不會出現空白
-                offset.X = Math.Max(offset.X, pictureBox_AreaImage.Width - imageWidth);
-            }
-
-            if (imageHeight < pictureBox_AreaImage.Height)
-            {
-                offset.Y = (pictureBox_AreaImage.Height - imageHeight) / 2;
-            }
-            else
-            {
-                // 確保上邊界不會出現空白
-                offset.Y = Math.Min(offset.Y, 0);
-                // 確保下邊界不會出現空白
-                offset.Y = Math.Max(offset.Y, pictureBox_AreaImage.Height - imageHeight);
-            }
-
-            pictureBox_AreaImage.Invalidate(); // 使用 Refresh 代替 Invalidate，強制立即重繪
+            ClampOffset();
+            pictureBox_AreaImage.Invalidate();
         }
-        // 當滑鼠按下左鍵時開始平移
+
         private void PictureBox_AreaImage_MouseDown(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Right)
@@ -231,208 +366,253 @@ namespace StandardOPage
             }
         }
 
-        // 滑鼠移動事件：拖曳圖片
         private void PictureBox_AreaImage_MouseMove(object sender, MouseEventArgs e)
         {
-            if (isPanning && pictureBox_AreaImage.Image != null)
-            {
-                // 計算圖片縮放後的寬高
-                float scaledWidth = pictureBox_AreaImage.Image.Width * zoomFactor;
-                float scaledHeight = pictureBox_AreaImage.Image.Height * zoomFactor;
+            if (!isPanning || displayImage == null)
+                return;
 
-                // 更新偏移量
-                offset.X += e.X - panStartPoint.X;
-                offset.Y += e.Y - panStartPoint.Y;
-
-                // 計算邊界範圍
-                int maxX = 0; // 圖片左邊界
-                int minX = (int)(pictureBox_AreaImage.Width - scaledWidth); // 圖片右邊界
-                int maxY = 0; // 圖片上邊界
-                int minY = (int)(pictureBox_AreaImage.Height - scaledHeight); // 圖片下邊界
-
-                // 限制 offset 不超出邊界
-                if (offset.X > maxX) offset.X = maxX;
-                if (offset.X < minX) offset.X = minX;
-                if (offset.Y > maxY) offset.Y = maxY;
-                if (offset.Y < minY) offset.Y = minY;
-
-                // 更新滑鼠起點
-                panStartPoint = e.Location;
-
-                // 重繪畫面
-                pictureBox_AreaImage.Invalidate();
-            }
+            offset.X += e.X - panStartPoint.X;
+            offset.Y += e.Y - panStartPoint.Y;
+            panStartPoint = e.Location;
+            ClampOffset();
+            pictureBox_AreaImage.Invalidate();
         }
 
-        // 滑鼠放開事件：結束平移
         private void PictureBox_AreaImage_MouseUp(object sender, MouseEventArgs e)
         {
             if (e.Button == MouseButtons.Right)
-            {
                 isPanning = false;
-            }
         }
 
-        // 畫面更新：顯示圖片並處理縮放和平移
+        private void ClampOffset()
+        {
+            if (displayImage == null)
+                return;
+
+            int imageWidth = (int)(displayImage.Width * zoomFactor);
+            int imageHeight = (int)(displayImage.Height * zoomFactor);
+
+            if (imageWidth <= pictureBox_AreaImage.Width)
+                offset.X = (pictureBox_AreaImage.Width - imageWidth) / 2;
+            else
+                offset.X = Math.Max(pictureBox_AreaImage.Width - imageWidth, Math.Min(0, offset.X));
+
+            if (imageHeight <= pictureBox_AreaImage.Height)
+                offset.Y = (pictureBox_AreaImage.Height - imageHeight) / 2;
+            else
+                offset.Y = Math.Max(pictureBox_AreaImage.Height - imageHeight, Math.Min(0, offset.Y));
+        }
+
         private void PictureBox_AreaImage_Paint(object sender, PaintEventArgs e)
         {
-            // 確保圖片已經加載
-            if (pictureBox_AreaImage.Image == null) return;
+            if (displayImage == null)
+                return;
 
-            // 創建 Graphics 物件來繪製圖形
-            Graphics g = e.Graphics;
+            e.Graphics.DrawImage(
+                displayImage,
+                new Rectangle(
+                    offset.X,
+                    offset.Y,
+                    (int)(displayImage.Width * zoomFactor),
+                    (int)(displayImage.Height * zoomFactor)));
 
-            // 先繪製縮放和平移後的圖片
-            g.DrawImage(pictureBox_AreaImage.Image,
-                new Rectangle(offset.X, offset.Y,
-                (int)(pictureBox_AreaImage.Image.Width * zoomFactor),
-                (int)(pictureBox_AreaImage.Image.Height * zoomFactor)));
-
-            // 如果在添加區域模式，繪製臨時點
-            if (button_SaveArea.Visible)
-            {
-                Paint_TempArea(sender, e);
-            }
-            else
-            {
-                // 繪製已保存的區域
-                foreach (var region in SingleAreaInfo.Regions)
-                {
-                    Point[] transformedPoints = region.Contour.ToArray()
-                        .Select(p => new Point(
-                            (int)(p.X * zoomFactor + offset.X),
-                            (int)(p.Y * zoomFactor + offset.Y)
-                        ))
-                        .ToArray();
-
-                    // 設定畫筆顏色並繪製多邊形
-                    using (Pen pen = new Pen(Color.Red, 2))  // 紅色畫筆，寬度為 2
-                    {
-                        if (transformedPoints.Length >= 3)
-                        {
-                            g.DrawPolygon(pen, transformedPoints);
-                        }
-                    }
-                }
-
-            }
+            DrawSavedRegions(e.Graphics);
+            if (isAddingArea)
+                DrawTempArea(e.Graphics);
         }
-        // 更新繪製臨時點的方法
-        private void Paint_TempArea(object sender, PaintEventArgs e)
+
+        private void DrawSavedRegions(Graphics graphics)
         {
-            // 確保圖片已經加載
-            if (pictureBox_AreaImage.Image == null) return;
-
-            // 創建 Graphics 物件來繪製圖形
-            Graphics g = e.Graphics;
-
-            // 先繪製縮放和平移後的圖片
-            g.DrawImage(pictureBox_AreaImage.Image,
-                new Rectangle(offset.X, offset.Y,
-                (int)(pictureBox_AreaImage.Image.Width * zoomFactor),
-                (int)(pictureBox_AreaImage.Image.Height * zoomFactor)));
-
-            // 如果沒有點可繪製，直接返回
-            if (tempPoints.Count == 0) return;
-
-            // 設定畫筆顏色
-            Pen pen = new Pen(Color.Red, 2);  // 紅色畫筆，寬度為 2
-
-            // 根據縮放和偏移計算轉換後的點
-            Point[] transformedPoints = tempPoints.Select(p => new Point(
-                (int)(p.X * zoomFactor + offset.X),
-                (int)(p.Y * zoomFactor + offset.Y)
-            )).ToArray();
-
-            // 繪製每個點（藍色標記）
-            foreach (var transformedPoint in transformedPoints)
+            for (int i = 0; i < workingRegions.Count; i++)
             {
-                g.FillEllipse(Brushes.Blue,
-                    transformedPoint.X - 4,
-                    transformedPoint.Y - 4,
-                    8, 8);  // 用藍色小圓點顯示每個點
-            }
+                Point[] points = workingRegions[i].Contour?.ToArray();
+                if (points == null || points.Length < 3)
+                    continue;
 
-            // 只有當點數至少為 3 時才繪製連線
-            if (transformedPoints.Length >= 3)
-            {
-                g.DrawPolygon(pen, transformedPoints);  // 連接點，繪製多邊形
+                Point[] transformed = points.Select(ImageToScreen).ToArray();
+                bool selected = i == selectedRegionIndex;
+                using (Pen pen = new Pen(selected ? Color.Yellow : Color.Red, selected ? 4F : 2F))
+                {
+                    graphics.DrawPolygon(pen, transformed);
+                }
             }
-
-            // 清理資源
-            pen.Dispose();
         }
+
+        private void DrawTempArea(Graphics graphics)
+        {
+            if (tempPoints.Count == 0)
+                return;
+
+            Point[] transformed = tempPoints.Select(ImageToScreen).ToArray();
+            foreach (Point point in transformed)
+            {
+                graphics.FillEllipse(Brushes.Blue, point.X - 4, point.Y - 4, 8, 8);
+            }
+
+            using (Pen pen = new Pen(Color.Red, 2F))
+            {
+                if (transformed.Length == 2)
+                    graphics.DrawLines(pen, transformed);
+                else if (transformed.Length >= 3)
+                    graphics.DrawPolygon(pen, transformed);
+            }
+        }
+
+        private Point ImageToScreen(Point p)
+        {
+            return new Point(
+                (int)(p.X * zoomFactor + offset.X),
+                (int)(p.Y * zoomFactor + offset.Y));
+        }
+
+        private Point ScreenToImage(Point p)
+        {
+            return new Point(
+                (int)((p.X - offset.X) / zoomFactor),
+                (int)((p.Y - offset.Y) / zoomFactor));
+        }
+
+        private bool IsInsideImage(Point p)
+        {
+            return displayImage != null &&
+                   p.X >= 0 && p.Y >= 0 &&
+                   p.X < displayImage.Width &&
+                   p.Y < displayImage.Height;
+        }
+
         private void PictureBox_AreaImage_AddPoint(object sender, MouseEventArgs e)
         {
-            if (e.Button == MouseButtons.Left)
-            {
-                // 計算實際圖像上的點位置（考慮縮放和偏移）
-                Point imagePoint = new Point(
-                    (int)((e.X - offset.X) / zoomFactor),
-                    (int)((e.Y - offset.Y) / zoomFactor)
-                );
+            if (!isAddingArea || e.Button != MouseButtons.Left)
+                return;
 
-                // 添加點到臨時點列表
-                tempPoints.Add(imagePoint);
+            Point imagePoint = ScreenToImage(e.Location);
+            if (!IsInsideImage(imagePoint))
+                return;
 
-                // 重繪以顯示新點
-                pictureBox_AreaImage.Invalidate();
-            }
+            tempPoints.Add(imagePoint);
+            pictureBox_AreaImage.Invalidate();
         }
-        private void Paint_SaveArea(object sender, PaintEventArgs e)
+
+        private void PictureBox_AreaImage_SelectRegion(object sender, MouseEventArgs e)
         {
-            // 確保圖片已經加載
-            if (pictureBox_AreaImage.Image == null) return;
+            if (isAddingArea || e.Button != MouseButtons.Left)
+                return;
 
-            // 創建 Graphics 物件來繪製圖形
-            Graphics g = e.Graphics;
+            Point imagePoint = ScreenToImage(e.Location);
+            if (!IsInsideImage(imagePoint))
+                return;
 
-            // 先繪製縮放和平移後的圖片
-            g.DrawImage(pictureBox_AreaImage.Image,
-                new Rectangle(offset.X, offset.Y,
-                (int)(pictureBox_AreaImage.Image.Width * zoomFactor),
-                (int)(pictureBox_AreaImage.Image.Height * zoomFactor)));
-
-            // 設定畫筆顏色
-            Pen pen = new Pen(Color.Red, 2);  // 紅色畫筆，寬度為 2
-
-            // 繪製所有已保存的區域
-            foreach (var region in SingleAreaInfo.Regions)
+            selectedRegionIndex = -1;
+            // 從最後加入的區域開始找，重疊時優先選到最上層。
+            for (int i = workingRegions.Count - 1; i >= 0; i--)
             {
-                Point[] points = region.Contour.ToArray();
-                if (points.Length >= 3)
-                {
-                    Point[] transformedPoints = points.Select(p => new Point(
-                        (int)(p.X * zoomFactor + offset.X),
-                        (int)(p.Y * zoomFactor + offset.Y)
-                    )).ToArray();
+                Point[] points = workingRegions[i].Contour?.ToArray();
+                if (points == null || points.Length < 3)
+                    continue;
 
-                    g.DrawPolygon(pen, transformedPoints);
+                using (GraphicsPath path = new GraphicsPath())
+                {
+                    path.AddPolygon(points);
+                    if (path.IsVisible(imagePoint))
+                    {
+                        selectedRegionIndex = i;
+                        break;
+                    }
                 }
             }
 
-
-            // 清理資源
-            pen.Dispose();
+            pictureBox_AreaImage.Invalidate();
         }
+
         #endregion
+
+        #region Region 編輯交易 / 復原
+
+        private static List<Region> CloneRegions(IEnumerable<Region> source)
+        {
+            var result = new List<Region>();
+            if (source == null)
+                return result;
+
+            foreach (Region region in source)
+            {
+                Point[] points = region?.Contour?.ToArray();
+                if (points == null || points.Length < 3)
+                    continue;
+
+                result.Add(new Region
+                {
+                    Contour = new VectorOfPoint(points),
+                    Area = region.Area
+                });
+            }
+            return result;
+        }
+
+        private void PushHistory()
+        {
+            editHistory.Push(
+                workingRegions
+                    .Select(r => r.Contour?.ToArray() ?? new Point[0])
+                    .ToList());
+        }
+
+        private void RestoreSnapshot(List<Point[]> snapshot)
+        {
+            DisposeRegions(workingRegions);
+            workingRegions = new List<Region>();
+
+            foreach (Point[] points in snapshot)
+            {
+                if (points == null || points.Length < 3)
+                    continue;
+
+                var contour = new VectorOfPoint(points);
+                workingRegions.Add(new Region
+                {
+                    Contour = contour,
+                    Area = Math.Abs(CvInvoke.ContourArea(contour))
+                });
+            }
+        }
+
+        private void CommitWorkingRegions()
+        {
+            if (SingleAreaInfo.Regions != null)
+                DisposeRegions(SingleAreaInfo.Regions);
+
+            SingleAreaInfo.Regions = CloneRegions(workingRegions);
+        }
+
+        private static void DisposeRegions(IEnumerable<Region> regions)
+        {
+            if (regions == null)
+                return;
+
+            foreach (Region region in regions)
+                region?.Contour?.Dispose();
+        }
+
+        private void Form_ReAnalyze_FormClosed(object sender, FormClosedEventArgs e)
+        {
+            pictureBox_AreaImage.MouseClick -= PictureBox_AreaImage_AddPoint;
+            DisposeRegions(workingRegions);
+            workingRegions.Clear();
+            displayImage?.Dispose();
+            displayImage = null;
+        }
+
         private void ValidateAllAreas()
         {
-            Debug.WriteLine($"Confirming with {SingleAreaInfo.Regions.Count} Regions:");
-
-            for (int i = 0; i < SingleAreaInfo.Regions.Count; i++)
+            Debug.WriteLine($"Confirming with {workingRegions.Count} Regions:");
+            for (int i = 0; i < workingRegions.Count; i++)
             {
-                var region = SingleAreaInfo.Regions[i];
+                Region region = workingRegions[i];
                 Point[] points = region.Contour.ToArray();
-
                 Debug.WriteLine($"Region {i} has {points.Length} points, Area: {region.Area:F2}");
-
-                foreach (var point in points)
-                {
-                    Debug.WriteLine($"  Point: ({point.X}, {point.Y})");
-                }
             }
         }
 
+        #endregion
     }
 }

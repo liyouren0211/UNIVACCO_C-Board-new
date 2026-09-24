@@ -127,6 +127,10 @@ namespace StandardOPage
         public Rectangle Bounds;  // 矩形範圍
         public int Block_Pixels;    //塞版數
         public int Defect_Pixels;   //缺燙數
+        // Font v15：用於重新分析後重新計算整體百分比的有效分母。
+        // 一般分析時等於 Template 前景/背景像素；人工排除區域後會扣除被排除的像素。
+        public int TemplateForegroundPixels;
+        public int TemplateBackgroundPixels;
     }
     //字體區分析結果
     public class Font_Results
