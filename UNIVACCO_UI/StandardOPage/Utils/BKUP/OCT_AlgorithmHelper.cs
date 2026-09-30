@@ -4566,12 +4566,11 @@ namespace StandardOPage
             {
                 Debug.WriteLine("[FontV15][Yin] 使用 v15：整條粗定位 -> 分字級局部 NCC -> ±5px 精細對位 -> Binary Difference");
                 return FontV15Algorithm.AnalyzeYin(
-                yinimage,
-                YinTemplates,
-                current_params,
-                saveoptions,
-                cardType);
-             }
+                    yinimage,
+                    YinTemplates,
+                    saveoptions,
+                    cardType);
+            }
             catch (Exception ex)
             {
                 OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "Yin FontV15 分析失敗", ex.ToString());
@@ -4661,7 +4660,6 @@ namespace StandardOPage
                 return FontV15Algorithm.AnalyzeYang(
                     yangimage,
                     YangTemplates,
-                    current_params,
                     saveoptions,
                     cardType,
                     breakArea03Ready);

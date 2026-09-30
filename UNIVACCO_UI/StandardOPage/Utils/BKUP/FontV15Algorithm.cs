@@ -15,13 +15,12 @@ namespace StandardOPage
     /// 字體區新對位分支 v15 的 C# / EmguCV 移植版。
     ///
     /// 對應 Python 主流程：
-    /// 1. Yin / Yang 固定二值化（Yin=150、Yang=150 並反相）只負責 v15 對位。
-    /// 2. 3pt~12pt 固定參考範圍（總寬 3550）。
-    /// 3. 整條字體 0.5 倍 NCC 粗定位 start_x。
-    /// 4. 每一字級在預期位置 ±40 px 做局部 NCC。
-    /// 5. 再於 ±5 px 做 X/Y 精細 NCC 對位。
-    /// 6. 對位完成後，實測影像改用工程介面各字級 Threshold 二值化。
-    /// 7. Template - Measured 產生缺燙；Measured - Template 產生塞版。
+    /// 1. Yin / Yang 固定二值化（Yin=150、Yang=150 並反相）
+    /// 2. 3pt~12pt 固定參考範圍（總寬 3550）
+    /// 3. 整條字體 0.5 倍 NCC 粗定位 start_x
+    /// 4. 每一字級在預期位置 ±40 px 做局部 NCC
+    /// 5. 再於 ±5 px 做 X/Y 精細 NCC 對位
+    /// 6. Template - Measured 產生缺燙；Measured - Template 產生塞版
     ///
     /// 為了相容目前 C-Board 舊模板（例如 21x575），若找不到真正的 v15
     /// 高解析模板，本類別會將舊模板等比例放大並置中到該字級的固定區段。
@@ -45,16 +44,10 @@ namespace StandardOPage
 
         private const int ReferenceWidth = 3550;
         private const int YinFixedThreshold = 150;
-        private const int YangFixedThreshold = 150;
+        private const int YangFixedThreshold = 130;
         private const int LocalAlignmentMaxShift = 40;
         private const int FineAlignmentMaxShift = 5;
         private const double CoarseScale = 0.5;
-
-        // 最近一次正常分析所使用的工程參數。
-        // ReAnalyze 會沿用同一個 CardType 的工程參數，避免人工重分析時又回到固定 150。
-        // 正常分析仍由 OCT_AlgorithmHelper 明確傳入 current_params。
-        private static OCT_Parameters_CardType _lastEngineeringParameters;
-        private static readonly object EngineeringParameterLock = new object();
 
         private sealed class FineAlignResult : IDisposable
         {
@@ -81,7 +74,6 @@ namespace StandardOPage
             public int ShiftX;
             public int ShiftY;
             public bool HitBoundary;
-            public double EngineeringThreshold;
             public Mat Original;
             public Mat Nominal;
             public Mat Selected;
@@ -133,17 +125,13 @@ namespace StandardOPage
             List<FontInfo>) AnalyzeYin(
                 Mat yinArea,
                 List<TemplateData> legacyTemplates,
-                OCT_Parameters_CardType currentParams,
                 OCT_Parameters_SaveOptions saveOptions,
                 string cardType)
         {
-            RememberEngineeringParameters(currentParams);
-
             var result = AnalyzeSide(
                 yinArea,
                 legacyTemplates,
                 true,
-                currentParams,
                 saveOptions,
                 cardType);
 
@@ -156,31 +144,6 @@ namespace StandardOPage
                 result.Item6);
         }
 
-        /// <summary>
-        /// 舊呼叫介面保留，避免其他測試工具立即失效。
-        /// 正式主流程應使用有 currentParams 的 overload。
-        /// </summary>
-        public static (
-            Font_Imgs,
-            Font_Imgs,
-            Font_Results,
-            Font_Imgs,
-            Font_Results,
-            List<FontInfo>) AnalyzeYin(
-                Mat yinArea,
-                List<TemplateData> legacyTemplates,
-                OCT_Parameters_SaveOptions saveOptions,
-                string cardType)
-        {
-            OCT_Parameters_CardType cached = GetRememberedEngineeringParameters();
-            return AnalyzeYin(
-                yinArea,
-                legacyTemplates,
-                cached,
-                saveOptions,
-                cardType);
-        }
-
         public static (
             Font_Imgs,
             Font_Imgs,
@@ -191,18 +154,14 @@ namespace StandardOPage
             Mat) AnalyzeYang(
                 Mat yangArea,
                 List<TemplateData> legacyTemplates,
-                OCT_Parameters_CardType currentParams,
                 OCT_Parameters_SaveOptions saveOptions,
                 string cardType,
                 TaskCompletionSource<Mat> breakArea03Ready = null)
         {
-            RememberEngineeringParameters(currentParams);
-
             var result = AnalyzeSide(
                 yangArea,
                 legacyTemplates,
                 false,
-                currentParams,
                 saveOptions,
                 cardType);
 
@@ -237,39 +196,9 @@ namespace StandardOPage
         }
 
         /// <summary>
-        /// 舊呼叫介面保留，避免其他測試工具立即失效。
-        /// 正式主流程應使用有 currentParams 的 overload。
-        /// </summary>
-        public static (
-            Font_Imgs,
-            Font_Imgs,
-            Font_Results,
-            Font_Imgs,
-            Font_Results,
-            List<FontInfo>,
-            Mat) AnalyzeYang(
-                Mat yangArea,
-                List<TemplateData> legacyTemplates,
-                OCT_Parameters_SaveOptions saveOptions,
-                string cardType,
-                TaskCompletionSource<Mat> breakArea03Ready = null)
-        {
-            OCT_Parameters_CardType cached = GetRememberedEngineeringParameters();
-            return AnalyzeYang(
-                yangArea,
-                legacyTemplates,
-                cached,
-                saveOptions,
-                cardType,
-                breakArea03Ready);
-        }
-
-        /// <summary>
         /// Font v15 單一字級重新分析。
-        ///
-        /// 對位仍使用固定 150，不受工程介面參數改變，避免破壞目前已驗證的 NCC 對位。
-        /// 對位完成後才用工程介面的 3pt~12pt 門檻重新二值化並計算缺燙/塞版。
-        /// 人工框選區域是真正的忽略區：不計入缺燙/塞版，也不計入分母。
+        /// 人工框選區域是真正的「忽略區」：不計入缺燙/塞版，也不計入分母。
+        /// 重新分析仍使用與主流程相同的固定二值化與 ±5 px 精細 NCC 對位。
         /// </summary>
         public static (
             Mat blockImg,
@@ -281,32 +210,6 @@ namespace StandardOPage
                 string fontName,
                 bool isYin,
                 List<TemplateData> legacyTemplates,
-                IEnumerable<Region> excludedRegions,
-                string cardType,
-                OCT_Parameters_SaveOptions saveOptions)
-        {
-            return ReAnalyzeSingleFont(
-                source,
-                fontName,
-                isYin,
-                legacyTemplates,
-                GetRememberedEngineeringParameters(),
-                excludedRegions,
-                cardType,
-                saveOptions);
-        }
-
-        public static (
-            Mat blockImg,
-            double blockPercentage,
-            Mat defectImg,
-            double defectPercentage,
-            FontInfo fontInfo) ReAnalyzeSingleFont(
-                Mat source,
-                string fontName,
-                bool isYin,
-                List<TemplateData> legacyTemplates,
-                OCT_Parameters_CardType currentParams,
                 IEnumerable<Region> excludedRegions,
                 string cardType,
                 OCT_Parameters_SaveOptions saveOptions)
@@ -321,18 +224,14 @@ namespace StandardOPage
             if (legacyTemplates == null || legacyTemplates.Count != FontNames.Length)
                 throw new ArgumentException("Template 數量錯誤，正常應為 10 張（3pt~12pt）");
 
-            RememberEngineeringParameters(currentParams);
-
             string sideName = isYin ? "Yin" : "Yang";
             int targetWidth = ReferenceX[index + 1] - ReferenceX[index];
 
             Mat sourceGray = null;
             Mat measuredGray = null;
-            Mat alignmentMeasuredBinary = null;
-            Mat engineeringMeasuredBinary = null;
+            Mat measuredBinary = null;
             Mat templateGray = null;
             Mat templateBinary = null;
-            Mat engineeringAligned = null;
             Mat validMaskSource = null;
             Mat validMask = null;
             Mat alignedValidMask = null;
@@ -363,8 +262,8 @@ namespace StandardOPage
                         isYin);
                 }
 
-                if (sourceGray.Width == targetWidth &&
-                    sourceGray.Height == templateGray.Height)
+                // 正常 v15 的 UI 原圖本來就是固定字級寬度；若碰到舊資料，做安全 Resize。
+                if (sourceGray.Width == targetWidth && sourceGray.Height == templateGray.Height)
                 {
                     measuredGray = sourceGray.Clone();
                 }
@@ -375,61 +274,30 @@ namespace StandardOPage
                         sourceGray,
                         measuredGray,
                         new Size(targetWidth, templateGray.Height),
-                        0,
-                        0,
+                        0, 0,
                         Inter.Linear);
                 }
 
-                // 1) 對位：固定 150，保留目前 v15 行為。
-                alignmentMeasuredBinary = FixedFontBinary(measuredGray, isYin);
+                measuredBinary = FixedFontBinary(measuredGray, isYin);
                 templateBinary = FixedFontBinary(templateGray, isYin);
-                fine = FineAlignBinary(
-                    alignmentMeasuredBinary,
-                    templateBinary,
-                    FineAlignmentMaxShift);
 
-                // 2) 計算：改用工程介面該字級門檻。
-                double engineeringThreshold = GetEngineeringThreshold(
-                    currentParams,
-                    index,
-                    isYin,
-                    saveOptions);
-
-                engineeringMeasuredBinary = FontBinaryWithThreshold(
-                    measuredGray,
-                    isYin,
-                    engineeringThreshold);
-
-                engineeringAligned = AlignBinaryWithKnownShift(
-                    engineeringMeasuredBinary,
-                    templateBinary.Size,
-                    FineAlignmentMaxShift,
-                    fine.ShiftX,
-                    fine.ShiftY);
-
-                // 先在使用者看到的原圖座標建立有效遮罩，再縮放到 v15 比對尺寸。
+                // 先在「使用者看到的原圖座標」建立有效遮罩，再縮放到 v15 比對尺寸。
                 validMaskSource = new Mat(source.Size, DepthType.Cv8U, 1);
                 validMaskSource.SetTo(new MCvScalar(255));
-
                 if (excludedRegions != null)
                 {
                     foreach (Region region in excludedRegions)
                     {
                         if (region?.Contour == null || region.Contour.Size < 3)
                             continue;
-
-                        using (var contours =
-                            new Emgu.CV.Util.VectorOfVectorOfPoint(region.Contour))
+                        using (var contours = new Emgu.CV.Util.VectorOfVectorOfPoint(region.Contour))
                         {
-                            CvInvoke.FillPoly(
-                                validMaskSource,
-                                contours,
-                                new MCvScalar(0));
+                            CvInvoke.FillPoly(validMaskSource, contours, new MCvScalar(0));
                         }
                     }
                 }
 
-                if (validMaskSource.Size == engineeringMeasuredBinary.Size)
+                if (validMaskSource.Size == measuredBinary.Size)
                 {
                     validMask = validMaskSource.Clone();
                 }
@@ -439,12 +307,12 @@ namespace StandardOPage
                     CvInvoke.Resize(
                         validMaskSource,
                         validMask,
-                        engineeringMeasuredBinary.Size,
-                        0,
-                        0,
+                        measuredBinary.Size,
+                        0, 0,
                         Inter.Nearest);
                 }
 
+                fine = FineAlignBinary(measuredBinary, templateBinary, FineAlignmentMaxShift);
                 alignedValidMask = AlignMaskWithFineShift(
                     validMask,
                     templateBinary.Size,
@@ -452,78 +320,55 @@ namespace StandardOPage
                     fine.ShiftX,
                     fine.ShiftY);
 
-                rawDefect = BuildDefectImage(
-                    engineeringAligned,
-                    templateBinary);
-                rawBlock = BuildBlockImage(
-                    engineeringAligned,
-                    templateBinary);
-
+                rawDefect = BuildDefectImage(fine.Aligned, templateBinary);
+                rawBlock = BuildBlockImage(fine.Aligned, templateBinary);
                 defect = new Mat();
                 block = new Mat();
-
                 CvInvoke.BitwiseAnd(rawDefect, alignedValidMask, defect);
                 CvInvoke.BitwiseAnd(rawBlock, alignedValidMask, block);
 
                 templateForegroundValid = new Mat();
-                CvInvoke.BitwiseAnd(
-                    templateBinary,
-                    alignedValidMask,
-                    templateForegroundValid);
+                CvInvoke.BitwiseAnd(templateBinary, alignedValidMask, templateForegroundValid);
 
                 int defectPixels = CountWhitePixels(defect);
                 int blockPixels = CountWhitePixels(block);
                 int foregroundPixels = CountWhitePixels(templateForegroundValid);
                 int validPixels = CountWhitePixels(alignedValidMask);
-                int backgroundPixels = Math.Max(
-                    0,
-                    validPixels - foregroundPixels);
+                int backgroundPixels = Math.Max(0, validPixels - foregroundPixels);
 
-                double defectPercentage =
-                    foregroundPixels <= 0
-                        ? 0.0
-                        : defectPixels * 100.0 / foregroundPixels;
-
-                double blockPercentage =
-                    backgroundPixels <= 0
-                        ? 0.0
-                        : blockPixels * 100.0 / backgroundPixels;
+                double defectPercentage = foregroundPixels <= 0
+                    ? 0.0
+                    : defectPixels * 100.0 / foregroundPixels;
+                double blockPercentage = backgroundPixels <= 0
+                    ? 0.0
+                    : blockPixels * 100.0 / backgroundPixels;
 
                 FontInfo fontInfo = new FontInfo
                 {
                     Fontname = fontName,
-                    Bounds = new Rectangle(
-                        0,
-                        0,
-                        source.Width,
-                        source.Height),
+                    Bounds = new Rectangle(0, 0, source.Width, source.Height),
                     Defect_Pixels = defectPixels,
                     Block_Pixels = blockPixels,
                     TemplateForegroundPixels = foregroundPixels,
                     TemplateBackgroundPixels = backgroundPixels
                 };
 
-                Debug.WriteLine(
-                    $"[FontV15][ReAnalyze][{sideName}][{fontName}] " +
-                    $"alignThreshold={(isYin ? YinFixedThreshold : YangFixedThreshold)}, " +
-                    $"engineeringThreshold={engineeringThreshold:F2} " +
-                    $"({ThresholdToPercent(engineeringThreshold):F1}%), " +
-                    $"score={fine.Score:F6}, shift=({fine.ShiftX},{fine.ShiftY}), " +
-                    $"defect={defectPixels} ({defectPercentage:F3}%), " +
-                    $"block={blockPixels} ({blockPercentage:F3}%)");
-
                 if (ShouldSaveDebug(saveOptions))
                 {
                     SaveSingleReAnalyzeDebug(
                         sideName,
                         fontName,
+                        sourceGray,
+                        measuredBinary,
                         templateBinary,
+                        validMask,
                         alignedValidMask,
-                        engineeringAligned,
+                        fine.Aligned,
+                        defect,
+                        block,
                         fine.Score,
                         fine.ShiftX,
                         fine.ShiftY,
-                        engineeringThreshold,
                         defectPercentage,
                         blockPercentage);
                 }
@@ -532,23 +377,15 @@ namespace StandardOPage
                 Mat retDefect = defect;
                 block = null;
                 defect = null;
-
-                return (
-                    retBlock,
-                    blockPercentage,
-                    retDefect,
-                    defectPercentage,
-                    fontInfo);
+                return (retBlock, blockPercentage, retDefect, defectPercentage, fontInfo);
             }
             finally
             {
                 sourceGray?.Dispose();
                 measuredGray?.Dispose();
-                alignmentMeasuredBinary?.Dispose();
-                engineeringMeasuredBinary?.Dispose();
+                measuredBinary?.Dispose();
                 templateGray?.Dispose();
                 templateBinary?.Dispose();
-                engineeringAligned?.Dispose();
                 validMaskSource?.Dispose();
                 validMask?.Dispose();
                 alignedValidMask?.Dispose();
@@ -562,16 +399,15 @@ namespace StandardOPage
         }
 
         /// <summary>
-        /// 依 FontInfo 中目前有效像素重新計算 v15 整體缺燙/塞版百分比。
+        /// 依 FontInfo 中目前有效像素重新計算 v15 的整體缺燙/塞版百分比。
+        /// 可正確反映多次重新分析後，不同字級各自的人工排除區。
         /// </summary>
         public static void RecalculateTotals(
             Font_Results defectResults,
             Font_Results blockResults,
             List<FontInfo> fontInfos)
         {
-            if (defectResults == null ||
-                blockResults == null ||
-                fontInfos == null)
+            if (defectResults == null || blockResults == null || fontInfos == null)
                 return;
 
             long defectPixels = 0;
@@ -581,28 +417,18 @@ namespace StandardOPage
 
             foreach (FontInfo info in fontInfos)
             {
-                if (info == null)
-                    continue;
-
+                if (info == null) continue;
                 defectPixels += Math.Max(0, info.Defect_Pixels);
                 blockPixels += Math.Max(0, info.Block_Pixels);
-                foregroundPixels += Math.Max(
-                    0,
-                    info.TemplateForegroundPixels);
-                backgroundPixels += Math.Max(
-                    0,
-                    info.TemplateBackgroundPixels);
+                foregroundPixels += Math.Max(0, info.TemplateForegroundPixels);
+                backgroundPixels += Math.Max(0, info.TemplateBackgroundPixels);
             }
 
-            defectResults.Defect_Total_Percentage =
-                foregroundPixels > 0
-                    ? defectPixels * 100.0 / foregroundPixels
-                    : 0.0;
+            if (foregroundPixels > 0)
+                defectResults.Defect_Total_Percentage = defectPixels * 100.0 / foregroundPixels;
 
-            blockResults.Block_Total_Percentage =
-                backgroundPixels > 0
-                    ? blockPixels * 100.0 / backgroundPixels
-                    : 0.0;
+            if (backgroundPixels > 0)
+                blockResults.Block_Total_Percentage = blockPixels * 100.0 / backgroundPixels;
         }
 
         /// <summary>
@@ -618,7 +444,6 @@ namespace StandardOPage
                 Mat area,
                 List<TemplateData> legacyTemplates,
                 bool isYin,
-                OCT_Parameters_CardType currentParams,
                 OCT_Parameters_SaveOptions saveOptions,
                 string cardType)
         {
@@ -709,15 +534,11 @@ namespace StandardOPage
                 {
                     SegmentInspection seg = InspectSegment(
                         area,
-                        grayComparison,
                         measuredBinary,
                         fullTemplateBinary,
-                        currentParams,
-                        saveOptions,
                         startX,
                         i,
-                        sideName,
-                        isYin);
+                        sideName);
 
                     segmentResults.Add(seg);
 
@@ -750,8 +571,6 @@ namespace StandardOPage
                         $"[FontV15][{sideName}][{seg.FontName}] " +
                         $"score={seg.FineScore:F6}, shift=({seg.ShiftX},{seg.ShiftY}), " +
                         $"coarseX={seg.FoundX1}, boundary={seg.HitBoundary}, " +
-                        $"engineeringThreshold={seg.EngineeringThreshold:F2} " +
-                        $"({ThresholdToPercent(seg.EngineeringThreshold):F1}%), " +
                         $"defect={seg.DefectPixels} ({seg.DefectPercentage:F3}%), " +
                         $"block={seg.BlockPixels} ({seg.BlockPercentage:F3}%)");
                 }
@@ -835,15 +654,11 @@ namespace StandardOPage
 
         private static SegmentInspection InspectSegment(
             Mat originalArea,
-            Mat grayComparison,
             Mat measuredBinary,
             Mat fullTemplateBinary,
-            OCT_Parameters_CardType currentParams,
-            OCT_Parameters_SaveOptions saveOptions,
             int globalStartX,
             int index,
-            string sideName,
-            bool isYin)
+            string sideName)
         {
             int expectedX1 = ReferenceX[index];
             int expectedX2 = ReferenceX[index + 1];
@@ -851,19 +666,11 @@ namespace StandardOPage
 
             Mat templateSegment = new Mat(
                 fullTemplateBinary,
-                new Rectangle(
-                    expectedX1,
-                    0,
-                    segmentWidth,
-                    fullTemplateBinary.Height)
+                new Rectangle(expectedX1, 0, segmentWidth, fullTemplateBinary.Height)
             ).Clone();
 
-            int windowX1 = Math.Max(
-                0,
-                expectedX1 - LocalAlignmentMaxShift);
-            int windowX2 = Math.Min(
-                measuredBinary.Width,
-                expectedX2 + LocalAlignmentMaxShift);
+            int windowX1 = Math.Max(0, expectedX1 - LocalAlignmentMaxShift);
+            int windowX2 = Math.Min(measuredBinary.Width, expectedX2 + LocalAlignmentMaxShift);
             int windowWidth = windowX2 - windowX1;
 
             if (windowWidth < segmentWidth)
@@ -875,10 +682,8 @@ namespace StandardOPage
             }
 
             Mat window = null;
-            Mat alignmentSelected = null;
-            Mat engineeringSelected = null;
-            Mat engineeringNominal = null;
-            Mat engineeringAligned = null;
+            Mat selected = null;
+            Mat nominal = null;
             Mat original = null;
             Mat block = null;
             Mat defect = null;
@@ -886,182 +691,84 @@ namespace StandardOPage
 
             try
             {
-                // A. 對位階段：仍然全部固定 150，不讓工程參數改變 NCC 位置。
                 window = new Mat(
                     measuredBinary,
-                    new Rectangle(
-                        windowX1,
-                        0,
-                        windowWidth,
-                        measuredBinary.Height)
+                    new Rectangle(windowX1, 0, windowWidth, measuredBinary.Height)
                 ).Clone();
 
                 Point localLoc;
-                double localScore = MatchTemplateBest(
-                    window,
-                    templateSegment,
-                    out localLoc);
+                double localScore = MatchTemplateBest(window, templateSegment, out localLoc);
 
                 int foundX1 = windowX1 + localLoc.X;
                 int foundX2 = foundX1 + segmentWidth;
-
-                foundX1 = Math.Max(
-                    0,
-                    Math.Min(
-                        foundX1,
-                        measuredBinary.Width - segmentWidth));
+                foundX1 = Math.Max(0, Math.Min(foundX1, measuredBinary.Width - segmentWidth));
                 foundX2 = foundX1 + segmentWidth;
 
                 bool hitBoundary =
                     localLoc.X == 0 ||
                     localLoc.X == (windowWidth - segmentWidth);
 
-                alignmentSelected = new Mat(
+                selected = new Mat(
                     measuredBinary,
-                    new Rectangle(
-                        foundX1,
-                        0,
-                        segmentWidth,
-                        measuredBinary.Height)
+                    new Rectangle(foundX1, 0, segmentWidth, measuredBinary.Height)
                 ).Clone();
 
-                fine = FineAlignBinary(
-                    alignmentSelected,
-                    templateSegment,
-                    FineAlignmentMaxShift);
+                nominal = new Mat(
+                    measuredBinary,
+                    new Rectangle(expectedX1, 0, segmentWidth, measuredBinary.Height)
+                ).Clone();
 
-                // B. 最終缺燙/塞版計算階段：
-                //    用工程介面各字級自己的 Threshold，但沿用 A 階段找到的位置與 shift。
-                double engineeringThreshold =
-                    GetEngineeringThreshold(
-                        currentParams,
-                        index,
-                        isYin,
-                        saveOptions);
+                fine = FineAlignBinary(selected, templateSegment, FineAlignmentMaxShift);
 
-                using (Mat selectedGray = new Mat(
-                    grayComparison,
-                    new Rectangle(
-                        foundX1,
-                        0,
-                        segmentWidth,
-                        grayComparison.Height)))
-                {
-                    engineeringSelected =
-                        FontBinaryWithThreshold(
-                            selectedGray,
-                            isYin,
-                            engineeringThreshold);
-                }
-
-                using (Mat nominalGray = new Mat(
-                    grayComparison,
-                    new Rectangle(
-                        expectedX1,
-                        0,
-                        segmentWidth,
-                        grayComparison.Height)))
-                {
-                    engineeringNominal =
-                        FontBinaryWithThreshold(
-                            nominalGray,
-                            isYin,
-                            engineeringThreshold);
-                }
-
-                engineeringAligned =
-                    AlignBinaryWithKnownShift(
-                        engineeringSelected,
-                        templateSegment.Size,
-                        FineAlignmentMaxShift,
-                        fine.ShiftX,
-                        fine.ShiftY);
-
-                defect = BuildDefectImage(
-                    engineeringAligned,
-                    templateSegment);
-                block = BuildBlockImage(
-                    engineeringAligned,
-                    templateSegment);
+                defect = BuildDefectImage(fine.Aligned, templateSegment);
+                block = BuildBlockImage(fine.Aligned, templateSegment);
 
                 int defectPixels = CountWhitePixels(defect);
                 int blockPixels = CountWhitePixels(block);
-                int templateForeground =
-                    CountWhitePixels(templateSegment);
-                int templateBackground =
-                    templateSegment.Width *
-                    templateSegment.Height -
-                    templateForeground;
+                int templateForeground = CountWhitePixels(templateSegment);
+                int templateBackground = templateSegment.Width * templateSegment.Height - templateForeground;
 
-                int sourceX =
-                    globalStartX + foundX1;
-                sourceX = Math.Max(
-                    0,
-                    Math.Min(
-                        sourceX,
-                        originalArea.Width - segmentWidth));
-
+                int sourceX = globalStartX + foundX1;
+                sourceX = Math.Max(0, Math.Min(sourceX, originalArea.Width - segmentWidth));
                 using (Mat originalRoi = new Mat(
                     originalArea,
-                    new Rectangle(
-                        sourceX,
-                        0,
-                        segmentWidth,
-                        originalArea.Height)))
+                    new Rectangle(sourceX, 0, segmentWidth, originalArea.Height)))
                 {
                     original = EnsureBgr(originalRoi);
                 }
 
-                SegmentInspection result =
-                    new SegmentInspection
-                    {
-                        FontName = FontNames[index],
-                        Index = index,
-                        ExpectedX1 = expectedX1,
-                        ExpectedX2 = expectedX2,
-                        FoundX1 = foundX1,
-                        CoarseScore = localScore,
-                        FineScore = fine.Score,
-                        ShiftX =
-                            (foundX1 - expectedX1) +
-                            fine.ShiftX,
-                        ShiftY = fine.ShiftY,
-                        HitBoundary = hitBoundary,
-                        EngineeringThreshold =
-                            engineeringThreshold,
-                        Original = original,
-                        Nominal = engineeringNominal,
-                        Selected = engineeringSelected,
-                        Template = templateSegment,
-                        Aligned = engineeringAligned,
-                        Defect = defect,
-                        Block = block,
-                        DefectPixels = defectPixels,
-                        BlockPixels = blockPixels,
-                        TemplateForegroundPixels =
-                            templateForeground,
-                        TemplateBackgroundPixels =
-                            templateBackground
-                    };
-
-                // 物件所有權交給 SegmentInspection。
-                original = null;
-                engineeringNominal = null;
-                engineeringSelected = null;
-                templateSegment = null;
-                engineeringAligned = null;
-                defect = null;
-                block = null;
-
-                return result;
+                return new SegmentInspection
+                {
+                    FontName = FontNames[index],
+                    Index = index,
+                    ExpectedX1 = expectedX1,
+                    ExpectedX2 = expectedX2,
+                    FoundX1 = foundX1,
+                    CoarseScore = localScore,
+                    FineScore = fine.Score,
+                    ShiftX = (foundX1 - expectedX1) + fine.ShiftX,
+                    ShiftY = fine.ShiftY,
+                    HitBoundary = hitBoundary,
+                    Original = original,
+                    Nominal = nominal,
+                    Selected = selected,
+                    Template = templateSegment,
+                    Aligned = fine.Aligned,
+                    Defect = defect,
+                    Block = block,
+                    DefectPixels = defectPixels,
+                    BlockPixels = blockPixels,
+                    TemplateForegroundPixels = templateForeground,
+                    TemplateBackgroundPixels = templateBackground
+                };
             }
             catch
             {
                 original?.Dispose();
-                engineeringNominal?.Dispose();
-                engineeringSelected?.Dispose();
+                nominal?.Dispose();
+                selected?.Dispose();
                 templateSegment?.Dispose();
-                engineeringAligned?.Dispose();
+                fine?.Dispose();
                 defect?.Dispose();
                 block?.Dispose();
                 throw;
@@ -1069,8 +776,91 @@ namespace StandardOPage
             finally
             {
                 window?.Dispose();
-                alignmentSelected?.Dispose();
-                fine?.Dispose();
+            }
+        }
+
+        private static Mat AlignMaskWithFineShift(
+            Mat validMask,
+            Size targetSize,
+            int maxShift,
+            int shiftX,
+            int shiftY)
+        {
+            Mat padded = new Mat(
+                new Size(validMask.Width + maxShift * 2, validMask.Height + maxShift * 2),
+                DepthType.Cv8U,
+                1);
+            padded.SetTo(new MCvScalar(0));
+            try
+            {
+                using (Mat center = new Mat(
+                    padded,
+                    new Rectangle(maxShift, maxShift, validMask.Width, validMask.Height)))
+                {
+                    validMask.CopyTo(center);
+                }
+
+                int x = maxShift + shiftX;
+                int y = maxShift + shiftY;
+                x = Math.Max(0, Math.Min(x, padded.Width - targetSize.Width));
+                y = Math.Max(0, Math.Min(y, padded.Height - targetSize.Height));
+
+                return new Mat(
+                    padded,
+                    new Rectangle(x, y, targetSize.Width, targetSize.Height)).Clone();
+            }
+            finally
+            {
+                padded.Dispose();
+            }
+        }
+
+        private static void SaveSingleReAnalyzeDebug(
+            string sideName,
+            string fontName,
+            Mat inputGray,
+            Mat inputBinary,
+            Mat templateBinary,
+            Mat validMask,
+            Mat alignedValidMask,
+            Mat aligned,
+            Mat defect,
+            Mat block,
+            double score,
+            int shiftX,
+            int shiftY,
+            double defectPercentage,
+            double blockPercentage)
+        {
+            string root = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory,
+                "FontV15_Debug",
+                "ReAnalyze",
+                sideName,
+                fontName);
+            Directory.CreateDirectory(root);
+
+            // Debug 圖只保留最終差異結果，不再輸出各處理步驟小圖。
+            DeleteDebugBmpFiles(root);
+            using (Mat rigidDiff = new Mat())
+            using (Mat maskedRigidDiff = new Mat())
+            {
+                CvInvoke.AbsDiff(aligned, templateBinary, rigidDiff);
+                CvInvoke.BitwiseAnd(rigidDiff, alignedValidMask, maskedRigidDiff);
+                CvInvoke.Imwrite(Path.Combine(root, "rigid_diff.bmp"), maskedRigidDiff);
+            }
+
+            using (StreamWriter writer = new StreamWriter(
+                Path.Combine(root, "reanalysis.txt"),
+                false,
+                System.Text.Encoding.UTF8))
+            {
+                writer.WriteLine("side=" + sideName);
+                writer.WriteLine("font=" + fontName);
+                writer.WriteLine("score=" + score.ToString("F6"));
+                writer.WriteLine("shift=(" + shiftX + "," + shiftY + ")");
+                writer.WriteLine("defect_pct=" + defectPercentage.ToString("F6"));
+                writer.WriteLine("block_pct=" + blockPercentage.ToString("F6"));
             }
         }
 
@@ -1136,25 +926,14 @@ namespace StandardOPage
 
         private static string GetProjectDataRoot()
         {
-            string baseDir =
-                AppDomain.CurrentDomain.BaseDirectory;
-
-            DirectoryInfo current =
-                new DirectoryInfo(baseDir);
-
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            DirectoryInfo current = new DirectoryInfo(baseDir);
             while (current != null)
             {
-                if (File.Exists(
-                    Path.Combine(
-                        current.FullName,
-                        "UNIVACCO_UI.csproj")))
-                {
+                if (File.Exists(Path.Combine(current.FullName, "UNIVACCO_UI.csproj")))
                     return current.FullName;
-                }
-
                 current = current.Parent;
             }
-
             return baseDir;
         }
 
@@ -1165,53 +944,21 @@ namespace StandardOPage
             int expectedHeight,
             int expectedWidth)
         {
-            string baseDir =
-                AppDomain.CurrentDomain.BaseDirectory;
-            string projectDataRoot =
-                GetProjectDataRoot();
-
-            string filename =
-                sideName + "_template_" +
-                fontName + ".bmp";
-
-            string safeCardType =
-                string.IsNullOrWhiteSpace(cardType)
-                    ? "白卡"
-                    : cardType.Trim();
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            string projectDataRoot = GetProjectDataRoot();
+            string filename = sideName + "_template_" + fontName + ".bmp";
+            string safeCardType = string.IsNullOrWhiteSpace(cardType) ? "白卡" : cardType.Trim();
 
             string[] candidates =
             {
                 // 正式 Git 金樣本位置
-                Path.Combine(
-                    projectDataRoot,
-                    "font_v15_templates",
-                    safeCardType,
-                    filename),
-                Path.Combine(
-                    projectDataRoot,
-                    "font_v15_templates",
-                    filename),
-                Path.Combine(
-                    projectDataRoot,
-                    "baseline_test",
-                    "templates",
-                    filename),
-
-                // EXE 部署 / 舊版相容位置
-                Path.Combine(
-                    baseDir,
-                    "font_v15_templates",
-                    safeCardType,
-                    filename),
-                Path.Combine(
-                    baseDir,
-                    "font_v15_templates",
-                    filename),
-                Path.Combine(
-                    baseDir,
-                    "baseline_test",
-                    "templates",
-                    filename)
+                Path.Combine(projectDataRoot, "font_v15_templates", safeCardType, filename),
+                Path.Combine(projectDataRoot, "font_v15_templates", filename),
+                Path.Combine(projectDataRoot, "baseline_test", "templates", filename),
+                // 舊版 / 單獨 EXE 部署相容
+                Path.Combine(baseDir, "font_v15_templates", safeCardType, filename),
+                Path.Combine(baseDir, "font_v15_templates", filename),
+                Path.Combine(baseDir, "baseline_test", "templates", filename)
             };
 
             foreach (string path in candidates)
@@ -1312,50 +1059,23 @@ namespace StandardOPage
             }
         }
 
-        private static Mat FixedFontBinary(
-            Mat grayInput,
-            bool isYin)
-        {
-            return FontBinaryWithThreshold(
-                grayInput,
-                isYin,
-                isYin
-                    ? YinFixedThreshold
-                    : YangFixedThreshold);
-        }
-
-        /// <summary>
-        /// 使用指定灰階門檻二值化。
-        /// Yin / Yang 最後都統一成「字體/前景 = 255、背景 = 0」，
-        /// 因此 Yang 在 Binary 後會反相。
-        /// </summary>
-        private static Mat FontBinaryWithThreshold(
-            Mat grayInput,
-            bool isYin,
-            double threshold)
+        private static Mat FixedFontBinary(Mat grayInput, bool isYin)
         {
             Mat gray = ToGray(grayInput);
             Mat binary = new Mat();
-
             try
             {
-                threshold = Math.Max(
-                    0.0,
-                    Math.Min(255.0, threshold));
-
                 CvInvoke.Threshold(
                     gray,
                     binary,
-                    threshold,
+                    isYin ? YinFixedThreshold : YangFixedThreshold,
                     255,
                     ThresholdType.Binary);
 
                 if (!isYin)
                 {
                     Mat inverted = new Mat();
-                    CvInvoke.BitwiseNot(
-                        binary,
-                        inverted);
+                    CvInvoke.BitwiseNot(binary, inverted);
                     binary.Dispose();
                     binary = inverted;
                 }
@@ -1368,219 +1088,6 @@ namespace StandardOPage
             {
                 gray.Dispose();
                 binary?.Dispose();
-            }
-        }
-
-        private static void RememberEngineeringParameters(
-            OCT_Parameters_CardType currentParams)
-        {
-            if (currentParams == null)
-                return;
-
-            lock (EngineeringParameterLock)
-            {
-                _lastEngineeringParameters =
-                    currentParams;
-            }
-        }
-
-        private static OCT_Parameters_CardType
-            GetRememberedEngineeringParameters()
-        {
-            lock (EngineeringParameterLock)
-            {
-                return _lastEngineeringParameters;
-            }
-        }
-
-        /// <summary>
-        /// 取得工程介面 3pt~12pt 的 Threshold。
-        /// OCT_Parameters_CardType 內的值已經由百分比換算成 0~255。
-        ///
-        /// MakeTemplates 時維持 v15 固定 Threshold，
-        /// 避免建立 Golden Sample 時受現場工程參數影響。
-        /// </summary>
-        private static double GetEngineeringThreshold(
-            OCT_Parameters_CardType currentParams,
-            int index,
-            bool isYin,
-            OCT_Parameters_SaveOptions saveOptions)
-        {
-            double fallback =
-                isYin
-                    ? YinFixedThreshold
-                    : YangFixedThreshold;
-
-            if (saveOptions != null &&
-                saveOptions.saveoption.MakeTemplates)
-            {
-                return fallback;
-            }
-
-            if (currentParams == null)
-            {
-                Debug.WriteLine(
-                    "[FontV15][Threshold] currentParams=null，" +
-                    "暫時使用固定門檻 " +
-                    fallback.ToString("F2"));
-                return fallback;
-            }
-
-            Font_Parameter p =
-                isYin
-                    ? currentParams.yin_parameter
-                    : currentParams.yang_parameter;
-
-            if (p == null)
-                return fallback;
-
-            double value;
-
-            switch (index)
-            {
-                case 0: value = p._3pt; break;
-                case 1: value = p._4pt; break;
-                case 2: value = p._5pt; break;
-                case 3: value = p._6pt; break;
-                case 4: value = p._7pt; break;
-                case 5: value = p._8pt; break;
-                case 6: value = p._9pt; break;
-                case 7: value = p._10pt; break;
-                case 8: value = p._11pt; break;
-                case 9: value = p._12pt; break;
-                default:
-                    throw new ArgumentOutOfRangeException(
-                        nameof(index));
-            }
-
-            return Math.Max(
-                0.0,
-                Math.Min(255.0, value));
-        }
-
-        private static double ThresholdToPercent(
-            double threshold)
-        {
-            return threshold / 255.0 * 100.0;
-        }
-
-        /// <summary>
-        /// 不重新搜尋位置，只把工程參數二值化後的影像套用
-        /// v15 固定門檻 NCC 已找到的 fine shift。
-        /// </summary>
-        private static Mat AlignBinaryWithKnownShift(
-            Mat measured,
-            Size targetSize,
-            int maxShift,
-            int shiftX,
-            int shiftY)
-        {
-            Mat padded = new Mat(
-                new Size(
-                    measured.Width + maxShift * 2,
-                    measured.Height + maxShift * 2),
-                measured.Depth,
-                measured.NumberOfChannels);
-
-            padded.SetTo(new MCvScalar(0));
-
-            try
-            {
-                using (Mat center = new Mat(
-                    padded,
-                    new Rectangle(
-                        maxShift,
-                        maxShift,
-                        measured.Width,
-                        measured.Height)))
-                {
-                    measured.CopyTo(center);
-                }
-
-                int x = maxShift + shiftX;
-                int y = maxShift + shiftY;
-
-                x = Math.Max(
-                    0,
-                    Math.Min(
-                        x,
-                        padded.Width - targetSize.Width));
-                y = Math.Max(
-                    0,
-                    Math.Min(
-                        y,
-                        padded.Height - targetSize.Height));
-
-                return new Mat(
-                    padded,
-                    new Rectangle(
-                        x,
-                        y,
-                        targetSize.Width,
-                        targetSize.Height)
-                ).Clone();
-            }
-            finally
-            {
-                padded.Dispose();
-            }
-        }
-
-        private static Mat AlignMaskWithFineShift(
-            Mat validMask,
-            Size targetSize,
-            int maxShift,
-            int shiftX,
-            int shiftY)
-        {
-            Mat padded = new Mat(
-                new Size(
-                    validMask.Width + maxShift * 2,
-                    validMask.Height + maxShift * 2),
-                DepthType.Cv8U,
-                1);
-
-            padded.SetTo(new MCvScalar(0));
-
-            try
-            {
-                using (Mat center = new Mat(
-                    padded,
-                    new Rectangle(
-                        maxShift,
-                        maxShift,
-                        validMask.Width,
-                        validMask.Height)))
-                {
-                    validMask.CopyTo(center);
-                }
-
-                int x = maxShift + shiftX;
-                int y = maxShift + shiftY;
-
-                x = Math.Max(
-                    0,
-                    Math.Min(
-                        x,
-                        padded.Width - targetSize.Width));
-                y = Math.Max(
-                    0,
-                    Math.Min(
-                        y,
-                        padded.Height - targetSize.Height));
-
-                return new Mat(
-                    padded,
-                    new Rectangle(
-                        x,
-                        y,
-                        targetSize.Width,
-                        targetSize.Height)
-                ).Clone();
-            }
-            finally
-            {
-                padded.Dispose();
             }
         }
 
@@ -1866,398 +1373,90 @@ namespace StandardOPage
                 AppDomain.CurrentDomain.BaseDirectory,
                 "FontV15_Debug",
                 sideName);
-
             Directory.CreateDirectory(sideRoot);
 
-            // 清掉舊版逐步小圖，現場只保留最後一張合併 rigid_diff。
-            string legacySegmentRoot =
-                Path.Combine(sideRoot, "font_segments");
-
+            // 清除舊版 font_segments 以及既有 BMP，避免殘留分步驟小圖。
+            string legacySegmentRoot = Path.Combine(sideRoot, "font_segments");
             if (Directory.Exists(legacySegmentRoot))
             {
-                try
-                {
-                    Directory.Delete(
-                        legacySegmentRoot,
-                        true);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine(
-                        "[FontV15][Debug] 無法清除舊 font_segments：" +
-                        ex.Message);
-                }
+                try { Directory.Delete(legacySegmentRoot, true); }
+                catch (Exception ex) { Debug.WriteLine("[FontV15][Debug] 無法清除舊 font_segments：" + ex.Message); }
             }
-
             DeleteDebugBmpFiles(sideRoot);
 
+            // 將 3pt~12pt 各字級精細對位結果重新組成整條影像。
             using (Mat alignedFull = new Mat(
-                new Size(
-                    ReferenceWidth,
-                    measuredBinary.Height),
+                new Size(ReferenceWidth, measuredBinary.Height),
                 DepthType.Cv8U,
                 1))
             using (Mat rigidDiff = new Mat())
             {
-                alignedFull.SetTo(
-                    new MCvScalar(0));
+                alignedFull.SetTo(new MCvScalar(0));
 
-                for (int i = 0;
-                    i < segments.Count &&
-                    i < FontNames.Length;
-                    i++)
+                for (int i = 0; i < segments.Count && i < FontNames.Length; i++)
                 {
-                    SegmentInspection seg =
-                        segments[i];
-
-                    if (seg?.Aligned == null ||
-                        seg.Aligned.IsEmpty)
-                    {
-                        continue;
-                    }
-
+                    SegmentInspection seg = segments[i];
                     int x1 = ReferenceX[i];
-                    int width =
-                        ReferenceX[i + 1] -
-                        ReferenceX[i];
-
-                    int copyWidth =
-                        Math.Min(
-                            width,
-                            seg.Aligned.Width);
-
-                    int copyHeight =
-                        Math.Min(
-                            alignedFull.Height,
-                            seg.Aligned.Height);
-
-                    if (copyWidth <= 0 ||
-                        copyHeight <= 0)
-                    {
+                    int width = ReferenceX[i + 1] - x1;
+                    int copyWidth = Math.Min(width, seg.Aligned.Width);
+                    int copyHeight = Math.Min(alignedFull.Height, seg.Aligned.Height);
+                    if (copyWidth <= 0 || copyHeight <= 0)
                         continue;
-                    }
 
-                    using (Mat srcRoi = new Mat(
-                        seg.Aligned,
-                        new Rectangle(
-                            0,
-                            0,
-                            copyWidth,
-                            copyHeight)))
-                    using (Mat dstRoi = new Mat(
-                        alignedFull,
-                        new Rectangle(
-                            x1,
-                            0,
-                            copyWidth,
-                            copyHeight)))
+                    using (Mat srcRoi = new Mat(seg.Aligned, new Rectangle(0, 0, copyWidth, copyHeight)))
+                    using (Mat dstRoi = new Mat(alignedFull, new Rectangle(x1, 0, copyWidth, copyHeight)))
                     {
                         srcRoi.CopyTo(dstRoi);
                     }
                 }
 
-                CvInvoke.AbsDiff(
-                    alignedFull,
-                    fullTemplateBinary,
-                    rigidDiff);
-
-                string rigidPath =
-                    Path.Combine(
-                        sideRoot,
-                        "rigid_diff.bmp");
-
-                bool saved =
-                    CvInvoke.Imwrite(
-                        rigidPath,
-                        rigidDiff);
-
-                if (saved)
-                {
-                    TouchFileTimestamp(
-                        rigidPath);
-                }
-
-                Debug.WriteLine(
-                    "[FontV15][Debug] rigid_diff save=" +
-                    saved +
-                    ", path=" +
-                    rigidPath);
+                // 與使用者提供的 rigid_diff.bmp 相同概念：
+                // 最終對位結果與 Template 做整條 AbsDiff，只輸出這一張合併結果圖。
+                CvInvoke.AbsDiff(alignedFull, fullTemplateBinary, rigidDiff);
+                CvInvoke.Imwrite(Path.Combine(sideRoot, "rigid_diff.bmp"), rigidDiff);
             }
 
-            string txtPath = Path.Combine(
-                sideRoot,
-                "ncc_alignment.txt");
-
-            using (StreamWriter writer =
-                new StreamWriter(
-                    txtPath,
-                    false,
-                    System.Text.Encoding.UTF8))
+            using (StreamWriter writer = new StreamWriter(
+                Path.Combine(sideRoot, "ncc_alignment.txt"),
+                false,
+                System.Text.Encoding.UTF8))
             {
-                writer.WriteLine(
-                    "FontV15 C# integration");
+                writer.WriteLine("FontV15 C# integration");
+                writer.WriteLine("side=" + sideName);
+                writer.WriteLine("reference_width=" + ReferenceWidth);
+                writer.WriteLine("threshold=" + (sideName == "Yin" ? YinFixedThreshold : YangFixedThreshold));
+                writer.WriteLine("coarse_start_x=" + startX);
+                writer.WriteLine("coarse_score=" + coarseScore.ToString("F6"));
+                writer.WriteLine("compatibility_template=" + compatibilityTemplateUsed);
+                writer.WriteLine("defect_total_percentage=" + defectResults.Defect_Total_Percentage.ToString("F6"));
+                writer.WriteLine("block_total_percentage=" + blockResults.Block_Total_Percentage.ToString("F6"));
 
-                writer.WriteLine(
-                    "generated_time=" +
-                    DateTime.Now.ToString(
-                        "yyyy/MM/dd HH:mm:ss"));
-
-                writer.WriteLine(
-                    "side=" + sideName);
-
-                writer.WriteLine(
-                    "reference_width=" +
-                    ReferenceWidth);
-
-                writer.WriteLine(
-                    "alignment_threshold=" +
-                    (sideName == "Yin"
-                        ? YinFixedThreshold
-                        : YangFixedThreshold));
-
-                writer.WriteLine(
-                    "coarse_start_x=" +
-                    startX);
-
-                writer.WriteLine(
-                    "coarse_score=" +
-                    coarseScore.ToString("F6"));
-
-                writer.WriteLine(
-                    "compatibility_template=" +
-                    compatibilityTemplateUsed);
-
-                writer.WriteLine(
-                    "defect_total_percentage=" +
-                    defectResults
-                        .Defect_Total_Percentage
-                        .ToString("F6"));
-
-                writer.WriteLine(
-                    "block_total_percentage=" +
-                    blockResults
-                        .Block_Total_Percentage
-                        .ToString("F6"));
-
-                foreach (
-                    SegmentInspection seg
-                    in segments)
+                foreach (SegmentInspection seg in segments)
                 {
                     writer.WriteLine(
                         seg.FontName + ": " +
-                        "score=" +
-                        seg.FineScore
-                            .ToString("F6") +
-                        ", shift=(" +
-                        seg.ShiftX + "," +
-                        seg.ShiftY + ")" +
-                        ", coarse_x1=" +
-                        seg.FoundX1 +
-                        ", coarse_score=" +
-                        seg.CoarseScore
-                            .ToString("F6") +
-                        ", boundary=" +
-                        seg.HitBoundary +
-                        ", engineering_threshold=" +
-                        seg.EngineeringThreshold
-                            .ToString("F2") +
-                        ", engineering_percent=" +
-                        ThresholdToPercent(
-                            seg.EngineeringThreshold)
-                            .ToString("F2") +
-                        ", defect=" +
-                        seg.DefectPixels +
-                        ", block=" +
-                        seg.BlockPixels +
-                        ", defect_pct=" +
-                        seg.DefectPercentage
-                            .ToString("F6") +
-                        ", block_pct=" +
-                        seg.BlockPercentage
-                            .ToString("F6"));
+                        "score=" + seg.FineScore.ToString("F6") + ", " +
+                        "shift=(" + seg.ShiftX + "," + seg.ShiftY + "), " +
+                        "coarse_x1=" + seg.FoundX1 + ", " +
+                        "coarse_score=" + seg.CoarseScore.ToString("F6") + ", " +
+                        "boundary=" + seg.HitBoundary + ", " +
+                        "defect=" + seg.DefectPixels + ", " +
+                        "block=" + seg.BlockPixels + ", " +
+                        "defect_pct=" + seg.DefectPercentage.ToString("F6") + ", " +
+                        "block_pct=" + seg.BlockPercentage.ToString("F6"));
                 }
             }
-
-            TouchFileTimestamp(txtPath);
         }
 
-        private static void SaveSingleReAnalyzeDebug(
-            string sideName,
-            string fontName,
-            Mat templateBinary,
-            Mat alignedValidMask,
-            Mat engineeringAligned,
-            double score,
-            int shiftX,
-            int shiftY,
-            double engineeringThreshold,
-            double defectPercentage,
-            double blockPercentage)
-        {
-            string root = Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "FontV15_Debug",
-                "ReAnalyze",
-                sideName,
-                fontName);
-
-            Directory.CreateDirectory(root);
-            DeleteDebugBmpFiles(root);
-
-            string rigidPath = Path.Combine(
-                root,
-                "rigid_diff.bmp");
-
-            using (Mat rigidDiff =
-                new Mat())
-            using (Mat maskedRigidDiff =
-                new Mat())
-            {
-                CvInvoke.AbsDiff(
-                    engineeringAligned,
-                    templateBinary,
-                    rigidDiff);
-
-                CvInvoke.BitwiseAnd(
-                    rigidDiff,
-                    alignedValidMask,
-                    maskedRigidDiff);
-
-                bool saved =
-                    CvInvoke.Imwrite(
-                        rigidPath,
-                        maskedRigidDiff);
-
-                if (saved)
-                {
-                    TouchFileTimestamp(
-                        rigidPath);
-                }
-            }
-
-            string txtPath = Path.Combine(
-                root,
-                "reanalysis.txt");
-
-            using (StreamWriter writer =
-                new StreamWriter(
-                    txtPath,
-                    false,
-                    System.Text.Encoding.UTF8))
-            {
-                writer.WriteLine(
-                    "generated_time=" +
-                    DateTime.Now.ToString(
-                        "yyyy/MM/dd HH:mm:ss"));
-
-                writer.WriteLine(
-                    "side=" + sideName);
-
-                writer.WriteLine(
-                    "font=" + fontName);
-
-                writer.WriteLine(
-                    "alignment_threshold=" +
-                    (sideName == "Yin"
-                        ? YinFixedThreshold
-                        : YangFixedThreshold));
-
-                writer.WriteLine(
-                    "engineering_threshold=" +
-                    engineeringThreshold
-                        .ToString("F2"));
-
-                writer.WriteLine(
-                    "engineering_percent=" +
-                    ThresholdToPercent(
-                        engineeringThreshold)
-                        .ToString("F2"));
-
-                writer.WriteLine(
-                    "score=" +
-                    score.ToString("F6"));
-
-                writer.WriteLine(
-                    "shift=(" +
-                    shiftX + "," +
-                    shiftY + ")");
-
-                writer.WriteLine(
-                    "defect_pct=" +
-                    defectPercentage
-                        .ToString("F6"));
-
-                writer.WriteLine(
-                    "block_pct=" +
-                    blockPercentage
-                        .ToString("F6"));
-            }
-
-            TouchFileTimestamp(txtPath);
-        }
-
-        private static void DeleteDebugBmpFiles(
-            string root)
+        private static void DeleteDebugBmpFiles(string root)
         {
             if (!Directory.Exists(root))
                 return;
 
-            foreach (
-                string path
-                in Directory.GetFiles(
-                    root,
-                    "*.bmp",
-                    SearchOption.TopDirectoryOnly))
+            foreach (string path in Directory.GetFiles(root, "*.bmp", SearchOption.TopDirectoryOnly))
             {
-                try
-                {
-                    File.Delete(path);
-                }
-                catch (Exception ex)
-                {
-                    Debug.WriteLine(
-                        "[FontV15][Debug] 無法刪除舊圖：" +
-                        path +
-                        " / " +
-                        ex.Message);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Windows 檔案總管有時顯示「建立日期」而不是「修改日期」。
-        /// Debug 圖每次更新後把三個時間都同步成現在，避免現場誤判成舊圖。
-        /// </summary>
-        private static void TouchFileTimestamp(
-            string path)
-        {
-            if (!File.Exists(path))
-                return;
-
-            try
-            {
-                DateTime now =
-                    DateTime.Now;
-
-                File.SetCreationTime(
-                    path,
-                    now);
-
-                File.SetLastWriteTime(
-                    path,
-                    now);
-
-                File.SetLastAccessTime(
-                    path,
-                    now);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine(
-                    "[FontV15][Debug] 更新檔案時間失敗：" +
-                    path +
-                    " / " +
-                    ex.Message);
+                try { File.Delete(path); }
+                catch (Exception ex) { Debug.WriteLine("[FontV15][Debug] 無法刪除舊圖：" + path + " / " + ex.Message); }
             }
         }
 
