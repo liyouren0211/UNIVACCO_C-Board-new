@@ -23,15 +23,58 @@ namespace UNIVACCO_UI
         public Setting_O_Window(UNIVACCO _MainPage, UserControl_Main _StandardOPage)
         {
             InitializeComponent();
+            ConfigureResponsiveLayout();
             MainPage = _MainPage;
             StandardOPage = _StandardOPage;
             ParameterChangeOPage = new UserControl_ParameterChange(MainPage, StandardOPage);    //參數頁面
             ThresholdChangeOPage = new UserControl_Rules(MainPage, StandardOPage);    //規則頁面
-            TempStandardChangeOPage = new UserControl_TempStandard(MainPage,StandardOPage);    //臨時標準頁面
+            TempStandardChangeOPage = new UserControl_TempStandard(MainPage, StandardOPage);    //臨時標準頁面
             StandardOSettingPage = new UserControl_SaveOptions(MainPage, StandardOPage);
+
+            // 工程視窗改為可放大的寬版配置。各功能頁在主 Panel 內自動延展。
+            ParameterChangeOPage.Dock = DockStyle.Fill;
+            ThresholdChangeOPage.Dock = DockStyle.Fill;
+            TempStandardChangeOPage.Dock = DockStyle.Fill;
+            StandardOSettingPage.Dock = DockStyle.Fill;
+
             panel_MainPage.Controls.Clear();
             panel_MainPage.Controls.Add(ParameterChangeOPage);
         }
+
+        /// <summary>
+        /// 工程設定視窗依目前螢幕工作區調整大小。
+        /// 不再為舊的內嵌預覽保留大面積空白；主內容區會跟著視窗伸縮。
+        /// </summary>
+        private void ConfigureResponsiveLayout()
+        {
+            Rectangle workingArea = Screen.FromControl(this).WorkingArea;
+
+            int targetWidth = Math.Min(1000, Math.Max(760, workingArea.Width - 40));
+            int targetHeight = Math.Min(850, Math.Max(620, workingArea.Height - 40));
+
+            ClientSize = new Size(targetWidth, targetHeight);
+            StartPosition = FormStartPosition.CenterScreen;
+            MaximizeBox = true;
+
+            // 上方工具列維持原高度，主內容填滿剩餘空間。
+            pictureBox3.Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right;
+            pictureBox3.Width = ClientSize.Width;
+
+            button_Save.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            button_Save.Left = ClientSize.Width - button_Save.Width - 13;
+
+            panel_MainPage.Location = new Point(0, 105);
+            panel_MainPage.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
+            panel_MainPage.Size = new Size(ClientSize.Width, Math.Max(100, ClientSize.Height - 105));
+
+            Resize += delegate
+            {
+                pictureBox3.Width = ClientSize.Width;
+                button_Save.Left = ClientSize.Width - button_Save.Width - 13;
+                panel_MainPage.Size = new Size(ClientSize.Width, Math.Max(100, ClientSize.Height - 105));
+            };
+        }
+
         private void button_ThresholdChangePage_Click(object sender, EventArgs e)
         {
             panel_MainPage.Controls.Clear();
@@ -47,6 +90,18 @@ namespace UNIVACCO_UI
             if (MessageBox.Show("你確定要儲存？", "資訊", MessageBoxButtons.YesNo) == DialogResult.Yes)
             {
                 #region 白卡參數
+                OCT_ParameterMeshP wc_meshp_Parameter = new OCT_ParameterMeshP()
+                {
+                    Name = "WC",
+                    Area10 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_10.Text),
+                    Area20 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_20.Text),
+                    Area30 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_30.Text),
+                    Area40 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_40.Text),
+                    Area60 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_60.Text),
+                    Area70 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_70.Text),
+                    Area80 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_80.Text),
+                    Area90 = Convert.ToDouble(ParameterChangeOPage.textBox_WC_MeshP_90.Text)
+                };
                 Font_Parameter wc_yin_Parameter = new Font_Parameter()
                 {
                     _3pt = Convert.ToDouble(ParameterChangeOPage.textBox_WC_Yin_3pt.Text),
@@ -88,6 +143,18 @@ namespace UNIVACCO_UI
 
                 #endregion
                 #region 雙銅參數
+                OCT_ParameterMeshP dc_meshp_Parameter = new OCT_ParameterMeshP()
+                {
+                    Name = "DC",
+                    Area10 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_10.Text),
+                    Area20 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_20.Text),
+                    Area30 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_30.Text),
+                    Area40 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_40.Text),
+                    Area60 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_60.Text),
+                    Area70 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_70.Text),
+                    Area80 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_80.Text),
+                    Area90 = Convert.ToDouble(ParameterChangeOPage.textBox_DC_MeshP_90.Text)
+                };
                 Font_Parameter dc_yin_Parameter = new Font_Parameter()
                 {
                     _3pt = Convert.ToDouble(ParameterChangeOPage.textBox_DC_Yin_3pt.Text),
@@ -238,13 +305,13 @@ namespace UNIVACCO_UI
                     Fullness_Threshold = StandardOSettingPage.checkbox_fullness_threshold.Checked,
                     MakeTemplates = StandardOSettingPage.checkbox_maketemplates.Checked,
                     IsValveEnabled = StandardOPage.IsValveEnabled,
-                    AutoMeshThresholdEnabled =StandardOPage.AutoMeshThresholdEnabled
+                    AutoMeshThresholdEnabled = StandardOPage.AutoMeshThresholdEnabled
                 };
 
-                StandardOPage.WC_Params.Save(wc_yin_Parameter, wc_yang_Parameter, wc_fullness_Parameter, wc_breakarea_Parameter);
-                StandardOPage.DC_Params.Save(dc_yin_Parameter, dc_yang_Parameter, dc_fullness_Parameter, dc_breakarea_Parameter);
+                StandardOPage.WC_Params.Save(wc_meshp_Parameter, wc_yin_Parameter, wc_yang_Parameter, wc_fullness_Parameter, wc_breakarea_Parameter);
+                StandardOPage.DC_Params.Save(dc_meshp_Parameter, dc_yin_Parameter, dc_yang_Parameter, dc_fullness_Parameter, dc_breakarea_Parameter);
 
-                StandardOPage.OCT_Rules.Save(meshp_rules,yin_rules,yang_rules,fullness_rules);
+                StandardOPage.OCT_Rules.Save(meshp_rules, yin_rules, yang_rules, fullness_rules);
                 StandardOPage.SaveOptions.Save(saveoption);
                 MessageBox.Show("參數儲存成功!", "系統資訊", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 this.Close();

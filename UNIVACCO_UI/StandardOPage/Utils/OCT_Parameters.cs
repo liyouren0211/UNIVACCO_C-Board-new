@@ -10,23 +10,39 @@ namespace StandardOPage
     {
         UNIVACCO MainPage;
         //網點區參數
+        public OCT_ParameterMeshP meshp_parameter = new OCT_ParameterMeshP();
         public Font_Parameter yin_parameter = new Font_Parameter();
         public Font_Parameter yang_parameter = new Font_Parameter();
         public Fullness_Parameter fullness_parameter = new Fullness_Parameter();
         public BreakArea_Parameter breakarea_parameter = new BreakArea_Parameter();
         private string cardtype;
-        // 初始化並從 INI 讀取
-        public OCT_Parameters_CardType(UNIVACCO _MainPage, string _cardtype)
-        {
+        private IList<double> fallbackMeshThresholds;
 
+        // 初始化並從 INI 讀取。
+        // 若現場舊版 INI 還沒有網點區欄位，會用「目前既有 ABSMeshP Threshold」
+        // 自動建立新欄位，不覆蓋任何既有字體 / 飽滿度 / 破開端參數。
+        public OCT_Parameters_CardType(UNIVACCO _MainPage, string _cardtype, IList<double> _fallbackMeshThresholds = null)
+        {
             MainPage = _MainPage;
             cardtype = _cardtype;
+            fallbackMeshThresholds = _fallbackMeshThresholds;
             Reload();
         }
         // 將 0~100 轉為 0~255
         public void Reload()
         {
             //讀取ini值百分比轉為Threshold值
+            // 網點區：INI 儲存 0~100 百分比，程式內轉成 0~255 Threshold
+            meshp_parameter.Name = cardtype;
+            meshp_parameter.Area10 = PercentToThreshold(ReadMeshPercent("Area10", 0));
+            meshp_parameter.Area20 = PercentToThreshold(ReadMeshPercent("Area20", 1));
+            meshp_parameter.Area30 = PercentToThreshold(ReadMeshPercent("Area30", 2));
+            meshp_parameter.Area40 = PercentToThreshold(ReadMeshPercent("Area40", 3));
+            meshp_parameter.Area60 = PercentToThreshold(ReadMeshPercent("Area60", 4));
+            meshp_parameter.Area70 = PercentToThreshold(ReadMeshPercent("Area70", 5));
+            meshp_parameter.Area80 = PercentToThreshold(ReadMeshPercent("Area80", 6));
+            meshp_parameter.Area90 = PercentToThreshold(ReadMeshPercent("Area90", 7));
+
             yin_parameter._3pt = PercentToThreshold(Convert.ToDouble(MainPage.ReadIniFile($"{cardtype}_Yin_Parameter", "_3pt", "OCTParameters.ini")));
             yin_parameter._4pt = PercentToThreshold(Convert.ToDouble(MainPage.ReadIniFile($"{cardtype}_Yin_Parameter", "_4pt", "OCTParameters.ini")));
             yin_parameter._5pt = PercentToThreshold(Convert.ToDouble(MainPage.ReadIniFile($"{cardtype}_Yin_Parameter", "_5pt", "OCTParameters.ini")));
@@ -54,28 +70,38 @@ namespace StandardOPage
             breakarea_parameter.Threshold_Step1 = PercentToThreshold(Convert.ToDouble(MainPage.ReadIniFile($"{cardtype}_BreakArea_Parameter", "Threshold_Step1", "OCTParameters.ini")));
 
         }
-        public void Save(Font_Parameter _yin_parameter, Font_Parameter _yang_parameter, Fullness_Parameter _fullness_parameter, BreakArea_Parameter _breakarea_parameter)
+        public void Save(OCT_ParameterMeshP _meshp_parameter, Font_Parameter _yin_parameter, Font_Parameter _yang_parameter, Fullness_Parameter _fullness_parameter, BreakArea_Parameter _breakarea_parameter)
         {
             //UI傳遞進來的百分比值轉為Threshold值
-            yin_parameter._3pt =    PercentToThreshold(_yin_parameter._3pt);
-            yin_parameter._4pt =    PercentToThreshold(_yin_parameter._4pt);
-            yin_parameter._5pt =    PercentToThreshold(_yin_parameter._5pt);
-            yin_parameter._6pt =    PercentToThreshold(_yin_parameter._6pt);
-            yin_parameter._7pt =    PercentToThreshold(_yin_parameter._7pt);
-            yin_parameter._8pt =    PercentToThreshold(_yin_parameter._8pt);
-            yin_parameter._9pt =    PercentToThreshold(_yin_parameter._9pt);
-            yin_parameter._10pt =   PercentToThreshold(_yin_parameter._10pt);
-            yin_parameter._11pt =   PercentToThreshold(_yin_parameter._11pt);
-            yin_parameter._12pt =   PercentToThreshold(_yin_parameter._12pt);
-            yang_parameter._3pt =   PercentToThreshold(_yang_parameter._3pt);
-            yang_parameter._4pt =   PercentToThreshold(_yang_parameter._4pt);
-            yang_parameter._5pt =   PercentToThreshold(_yang_parameter._5pt);
-            yang_parameter._6pt =   PercentToThreshold(_yang_parameter._6pt);
-            yang_parameter._7pt =   PercentToThreshold(_yang_parameter._7pt);
-            yang_parameter._8pt =   PercentToThreshold(_yang_parameter._8pt);
-            yang_parameter._9pt =   PercentToThreshold(_yang_parameter._9pt);
-            yang_parameter._10pt =  PercentToThreshold(_yang_parameter._10pt);
-            yang_parameter._11pt =  PercentToThreshold(_yang_parameter._11pt);
+            meshp_parameter.Name = cardtype;
+            meshp_parameter.Area10 = PercentToThreshold(_meshp_parameter.Area10);
+            meshp_parameter.Area20 = PercentToThreshold(_meshp_parameter.Area20);
+            meshp_parameter.Area30 = PercentToThreshold(_meshp_parameter.Area30);
+            meshp_parameter.Area40 = PercentToThreshold(_meshp_parameter.Area40);
+            meshp_parameter.Area60 = PercentToThreshold(_meshp_parameter.Area60);
+            meshp_parameter.Area70 = PercentToThreshold(_meshp_parameter.Area70);
+            meshp_parameter.Area80 = PercentToThreshold(_meshp_parameter.Area80);
+            meshp_parameter.Area90 = PercentToThreshold(_meshp_parameter.Area90);
+
+            yin_parameter._3pt = PercentToThreshold(_yin_parameter._3pt);
+            yin_parameter._4pt = PercentToThreshold(_yin_parameter._4pt);
+            yin_parameter._5pt = PercentToThreshold(_yin_parameter._5pt);
+            yin_parameter._6pt = PercentToThreshold(_yin_parameter._6pt);
+            yin_parameter._7pt = PercentToThreshold(_yin_parameter._7pt);
+            yin_parameter._8pt = PercentToThreshold(_yin_parameter._8pt);
+            yin_parameter._9pt = PercentToThreshold(_yin_parameter._9pt);
+            yin_parameter._10pt = PercentToThreshold(_yin_parameter._10pt);
+            yin_parameter._11pt = PercentToThreshold(_yin_parameter._11pt);
+            yin_parameter._12pt = PercentToThreshold(_yin_parameter._12pt);
+            yang_parameter._3pt = PercentToThreshold(_yang_parameter._3pt);
+            yang_parameter._4pt = PercentToThreshold(_yang_parameter._4pt);
+            yang_parameter._5pt = PercentToThreshold(_yang_parameter._5pt);
+            yang_parameter._6pt = PercentToThreshold(_yang_parameter._6pt);
+            yang_parameter._7pt = PercentToThreshold(_yang_parameter._7pt);
+            yang_parameter._8pt = PercentToThreshold(_yang_parameter._8pt);
+            yang_parameter._9pt = PercentToThreshold(_yang_parameter._9pt);
+            yang_parameter._10pt = PercentToThreshold(_yang_parameter._10pt);
+            yang_parameter._11pt = PercentToThreshold(_yang_parameter._11pt);
             yang_parameter._12pt = PercentToThreshold(_yang_parameter._12pt);
             fullness_parameter.Threshold = PercentToThreshold(_fullness_parameter.Threshold);
             breakarea_parameter.Threshold_01 = PercentToThreshold(_breakarea_parameter.Threshold_01);
@@ -84,6 +110,15 @@ namespace StandardOPage
             breakarea_parameter.Threshold_Step1 = PercentToThreshold(_breakarea_parameter.Threshold_Step1);
 
             //UI傳遞進來的百分比值存入ini
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area10", _meshp_parameter.Area10.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area20", _meshp_parameter.Area20.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area30", _meshp_parameter.Area30.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area40", _meshp_parameter.Area40.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area60", _meshp_parameter.Area60.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area70", _meshp_parameter.Area70.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area80", _meshp_parameter.Area80.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_MeshP_Parameter", "Area90", _meshp_parameter.Area90.ToString(), "OCTParameters.ini");
+
             MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_3pt", _yin_parameter._3pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_4pt", _yin_parameter._4pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_5pt", _yin_parameter._5pt.ToString(), "OCTParameters.ini");
@@ -91,9 +126,9 @@ namespace StandardOPage
             MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_7pt", _yin_parameter._7pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_8pt", _yin_parameter._8pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_9pt", _yin_parameter._9pt.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_10pt",_yin_parameter._10pt.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_11pt",_yin_parameter._11pt.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_12pt",_yin_parameter._12pt.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_10pt", _yin_parameter._10pt.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_11pt", _yin_parameter._11pt.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_Yin_Parameter", "_12pt", _yin_parameter._12pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_3pt", _yang_parameter._3pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_4pt", _yang_parameter._4pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_5pt", _yang_parameter._5pt.ToString(), "OCTParameters.ini");
@@ -101,15 +136,35 @@ namespace StandardOPage
             MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_7pt", _yang_parameter._7pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_8pt", _yang_parameter._8pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_9pt", _yang_parameter._9pt.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_10pt",_yang_parameter._10pt.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_11pt",_yang_parameter._11pt.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_12pt",_yang_parameter._12pt.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_10pt", _yang_parameter._10pt.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_11pt", _yang_parameter._11pt.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_Yang_Parameter", "_12pt", _yang_parameter._12pt.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_Fullness_Parameter", "Threshold", _fullness_parameter.Threshold.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_BreakArea_Parameter", "Threshold_01", _breakarea_parameter.Threshold_01.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_BreakArea_Parameter", "Threshold_02", _breakarea_parameter.Threshold_02.ToString(), "OCTParameters.ini");
             MainPage.IniWriteValue($"{cardtype}_BreakArea_Parameter", "Threshold_03", _breakarea_parameter.Threshold_03.ToString(), "OCTParameters.ini");
-            MainPage.IniWriteValue($"{cardtype}_BreakArea_Parameter", "Threshold_Step1",_breakarea_parameter.Threshold_Step1.ToString(), "OCTParameters.ini");
+            MainPage.IniWriteValue($"{cardtype}_BreakArea_Parameter", "Threshold_Step1", _breakarea_parameter.Threshold_Step1.ToString(), "OCTParameters.ini");
         }
+        private double ReadMeshPercent(string key, int fallbackIndex)
+        {
+            string section = $"{cardtype}_MeshP_Parameter";
+            string raw = MainPage.ReadIniFile(section, key, "OCTParameters.ini");
+
+            double percent;
+            if (!string.IsNullOrWhiteSpace(raw) && double.TryParse(raw, out percent))
+                return Math.Max(0.0, Math.Min(100.0, percent));
+
+            // 舊版現場升級：新欄位不存在時，以目前資料庫正在使用的 Threshold 為初始值。
+            // 只新增缺少的 key，不會覆寫現場其他既有參數。
+            double threshold = 128.0;
+            if (fallbackMeshThresholds != null && fallbackIndex >= 0 && fallbackIndex < fallbackMeshThresholds.Count)
+                threshold = fallbackMeshThresholds[fallbackIndex];
+
+            percent = Math.Round(threshold / 255.0 * 100.0, 2);
+            MainPage.IniWriteValue(section, key, percent.ToString(), "OCTParameters.ini");
+            return percent;
+        }
+
         private double PercentToThreshold(double percent)
         {
             return percent / 100.0 * 255.0;

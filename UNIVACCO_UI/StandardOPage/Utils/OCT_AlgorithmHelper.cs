@@ -55,6 +55,12 @@ namespace StandardOPage
             public int GridWidth { get; set; } = 2050;
             public int GridHeight { get; set; } = 1226;
 
+            // 網點實際分析 ROI 內縮量。
+            // 用途：避免定位稍有偏移時，ROI 邊緣吃到隔壁區域 / 框線。
+            // 只影響 8 個網點區，不影響 BreakArea。
+            public int AnalysisInsetX { get; set; } = 5;
+            public int AnalysisInsetY { get; set; } = 5;
+
             public int S1LeftXOffsetFromMid { get; set; } = 2050;
             public int S2LeftXOffsetFromMid { get; set; } = 2050;
 
@@ -1722,6 +1728,20 @@ namespace StandardOPage
                 gridHeight
             );
 
+            // ================================================================
+            // 網點區統一往內縮一點，避免 ROI 邊緣誤切到其他區域。
+            // 目前預設左右各 20 px、上下各 20 px。
+            // 若現場還會吃到旁邊，可把 MeshROI.AnalysisInsetX/Y 微調大一點。
+            // ================================================================
+            ApplyMeshAreaInset(ref Area10, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area20, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area30, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area40, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area60, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area70, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area80, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+            ApplyMeshAreaInset(ref Area90, MeshROI.AnalysisInsetX, MeshROI.AnalysisInsetY);
+
             // 保留既有輸出檔名，避免影響現場其他流程
             CvInvoke.Imwrite("Area10.bmp", Area10);
             CvInvoke.Imwrite("Area20.bmp", Area20);
@@ -1769,6 +1789,36 @@ namespace StandardOPage
 
             await Task.CompletedTask;
             return (meshp_areas, BreakArea_01_crop);
+        }
+
+        /// <summary>
+        /// 將網點 ROI 四周往內縮，避免邊界誤吃到隔壁區域。
+        /// </summary>
+        private static void ApplyMeshAreaInset(ref Mat area, int insetX, int insetY)
+        {
+            if (area == null || area.IsEmpty)
+                return;
+
+            insetX = Math.Max(0, insetX);
+            insetY = Math.Max(0, insetY);
+
+            int newWidth = area.Width - insetX * 2;
+            int newHeight = area.Height - insetY * 2;
+
+            // 防呆：設定過大時維持原圖，不讓 ROI 變成無效尺寸。
+            if (newWidth <= 10 || newHeight <= 10)
+                return;
+
+            Rectangle innerRect = new Rectangle(
+                insetX,
+                insetY,
+                newWidth,
+                newHeight
+            );
+
+            Mat oldArea = area;
+            area = new Mat(oldArea, innerRect).Clone();
+            oldArea.Dispose();
         }
 
         public static async Task<(Mat, Mat)> Merge_FontArea(Mat sourceimg3, Mat sourceimg4)
@@ -4571,7 +4621,7 @@ namespace StandardOPage
                 current_params,
                 saveoptions,
                 cardType);
-             }
+            }
             catch (Exception ex)
             {
                 OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "Yin FontV15 分析失敗", ex.ToString());

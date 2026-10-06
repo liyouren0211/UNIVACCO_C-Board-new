@@ -240,9 +240,10 @@ namespace UNIVACCO_UI
                 Debug.WriteLine($"錯誤訊息: {ex.Message}");
             }
             OCT_SaveFileHelper = new OCT_SaveFileHelper(MainPage.ResultSavePath);
-            WC_Params = new OCT_Parameters_CardType(MainPage, "WC");
-            DC_Params = new OCT_Parameters_CardType(MainPage, "DC");
+            WC_Params = new OCT_Parameters_CardType(MainPage, "WC", meshp_current_thresholds);
+            DC_Params = new OCT_Parameters_CardType(MainPage, "DC", meshp_current_thresholds);
             CurrentCardType_Params = WC_Params;
+            meshp_current_thresholds = GetCurrentCardMeshThresholds();
             LabPrint_Params = new OCT_Parameters_PrintType(MainPage, "LabPrint");
             OffsetPrint_Params = new OCT_Parameters_PrintType(MainPage, "OffsetPrint");
             CurrentPrintType_Params = LabPrint_Params;
@@ -259,9 +260,84 @@ namespace UNIVACCO_UI
         #endregion
 
         #region 系統流程
+        private List<double> GetCurrentCardMeshThresholds()
+        {
+            OCT_ParameterMeshP mesh = CurrentCardType_Params.meshp_parameter;
+            return new List<double>()
+            {
+                mesh.Area10,
+                mesh.Area20,
+                mesh.Area30,
+                mesh.Area40,
+                mesh.Area60,
+                mesh.Area70,
+                mesh.Area80,
+                mesh.Area90
+            };
+        }
+
+        /// <summary>
+        /// 取得最近一次分析留下的網點 ROI 原圖副本，供工程參數頁做即時預覽。
+        /// 呼叫端需要 Dispose 回傳的 Mat。
+        /// </summary>
+        public Mat GetMeshPreviewSource(int areaPercent)
+        {
+            Mat source = null;
+            switch (areaPercent)
+            {
+                case 10: source = MeshP_Imgs?.Area10; break;
+                case 20: source = MeshP_Imgs?.Area20; break;
+                case 30: source = MeshP_Imgs?.Area30; break;
+                case 40: source = MeshP_Imgs?.Area40; break;
+                case 60: source = MeshP_Imgs?.Area60; break;
+                case 70: source = MeshP_Imgs?.Area70; break;
+                case 80: source = MeshP_Imgs?.Area80; break;
+                case 90: source = MeshP_Imgs?.Area90; break;
+            }
+
+            if (source == null || source.IsEmpty)
+                return null;
+
+            return source.Clone();
+        }
+
+        /// <summary>
+        /// 取得最近一次字體分析留下的 ROI 原圖副本，供獨立工程預覽視窗使用。
+        /// 呼叫端需要 Dispose 回傳的 Mat。
+        /// </summary>
+        public Mat GetFontPreviewSource(bool isYin, int pointSize)
+        {
+            Font_Imgs imgs = isYin ? Yin_Imgs : Yang_Imgs;
+            if (imgs == null) return null;
+
+            Mat source = null;
+            switch (pointSize)
+            {
+                case 3: source = imgs._3pt; break;
+                case 4: source = imgs._4pt; break;
+                case 5: source = imgs._5pt; break;
+                case 6: source = imgs._6pt; break;
+                case 7: source = imgs._7pt; break;
+                case 8: source = imgs._8pt; break;
+                case 9: source = imgs._9pt; break;
+                case 10: source = imgs._10pt; break;
+                case 11: source = imgs._11pt; break;
+                case 12: source = imgs._12pt; break;
+            }
+
+            if (source == null || source.IsEmpty)
+                return null;
+
+            return source.Clone();
+        }
+
         private async Task SystemProceess_MeshP(Mat sourceimg1, Mat sourceimg2)
         {
-            var meshp_task = Task.Run(() => OCT_AlgorithmHelper.MeshP_anylz(sourceimg1, sourceimg2, meshp_current_thresholds, CurrentPrintType_Params, SaveOptions, AutoMeshThresholdEnabled));
+            // 網點區固定使用目前卡型（白卡 / 雙銅）參數頁設定的 10%~90% Threshold。
+            // 不再由「手動 / 自動」模式切換。
+            meshp_current_thresholds = GetCurrentCardMeshThresholds();
+
+            var meshp_task = Task.Run(() => OCT_AlgorithmHelper.MeshP_anylz(sourceimg1, sourceimg2, meshp_current_thresholds, CurrentPrintType_Params, SaveOptions, false));
             await Task.WhenAll(meshp_task);
             var meshp_result = meshp_task.Result;
 
@@ -1219,6 +1295,9 @@ namespace UNIVACCO_UI
             {
                 CurrentCardType_Params = DC_Params;
             }
+
+            // 卡型切換時同步網點區固定參數，供單區重算等流程沿用。
+            meshp_current_thresholds = GetCurrentCardMeshThresholds();
             LoadTemplates(selectname);
         }
 
@@ -1266,15 +1345,15 @@ namespace UNIVACCO_UI
                     Fullness_Results = Fullness_Results,
                     MeshP_Standard = new OCT_ParameterMeshP
                     {
-                        Name = standardname,
-                        Area10 = meshp_current_thresholds[0],
-                        Area20 = meshp_current_thresholds[1],
-                        Area30 = meshp_current_thresholds[2],
-                        Area40 = meshp_current_thresholds[3],
-                        Area60 = meshp_current_thresholds[4],
-                        Area70 = meshp_current_thresholds[5],
-                        Area80 = meshp_current_thresholds[6],
-                        Area90 = meshp_current_thresholds[7]
+                        Name = comboBox_CardType.Text + "_Parameter",
+                        Area10 = CurrentCardType_Params.meshp_parameter.Area10,
+                        Area20 = CurrentCardType_Params.meshp_parameter.Area20,
+                        Area30 = CurrentCardType_Params.meshp_parameter.Area30,
+                        Area40 = CurrentCardType_Params.meshp_parameter.Area40,
+                        Area60 = CurrentCardType_Params.meshp_parameter.Area60,
+                        Area70 = CurrentCardType_Params.meshp_parameter.Area70,
+                        Area80 = CurrentCardType_Params.meshp_parameter.Area80,
+                        Area90 = CurrentCardType_Params.meshp_parameter.Area90
                     },
                     Yin_Parameter = CurrentCardType_Params.yin_parameter,
                     Yang_Parameter = CurrentCardType_Params.yang_parameter,

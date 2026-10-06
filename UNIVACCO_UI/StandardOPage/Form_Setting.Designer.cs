@@ -44,7 +44,8 @@
             this.panel_MainPage.Location = new System.Drawing.Point(0, 105);
             this.panel_MainPage.Margin = new System.Windows.Forms.Padding(3, 2, 3, 2);
             this.panel_MainPage.Name = "panel_MainPage";
-            this.panel_MainPage.Size = new System.Drawing.Size(1264, 974);
+            this.panel_MainPage.Size = new System.Drawing.Size(1594, 795);
+            this.panel_MainPage.Anchor = ((System.Windows.Forms.AnchorStyles)((((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Bottom) | System.Windows.Forms.AnchorStyles.Left) | System.Windows.Forms.AnchorStyles.Right)));
             this.panel_MainPage.TabIndex = 67;
             // 
             // button_StandardOSettingPage
@@ -136,7 +137,8 @@
             this.button_Save.FlatAppearance.BorderSize = 0;
             this.button_Save.FlatStyle = System.Windows.Forms.FlatStyle.Flat;
             this.button_Save.ForeColor = System.Drawing.SystemColors.ControlText;
-            this.button_Save.Location = new System.Drawing.Point(1144, 11);
+            this.button_Save.Location = new System.Drawing.Point(1470, 11);
+            this.button_Save.Anchor = ((System.Windows.Forms.AnchorStyles)((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Right)));
             this.button_Save.Margin = new System.Windows.Forms.Padding(4);
             this.button_Save.Name = "button_Save";
             this.button_Save.RightToLeft = System.Windows.Forms.RightToLeft.No;
@@ -153,7 +155,8 @@
             this.pictureBox3.Location = new System.Drawing.Point(-1, 0);
             this.pictureBox3.Margin = new System.Windows.Forms.Padding(4);
             this.pictureBox3.Name = "pictureBox3";
-            this.pictureBox3.Size = new System.Drawing.Size(1265, 102);
+            this.pictureBox3.Size = new System.Drawing.Size(1595, 102);
+            this.pictureBox3.Anchor = ((System.Windows.Forms.AnchorStyles)(((System.Windows.Forms.AnchorStyles.Top | System.Windows.Forms.AnchorStyles.Left) | System.Windows.Forms.AnchorStyles.Right)));
             this.pictureBox3.TabIndex = 70;
             this.pictureBox3.TabStop = false;
             // 
@@ -162,7 +165,7 @@
             this.AutoScaleDimensions = new System.Drawing.SizeF(8F, 15F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
             this.BackColor = System.Drawing.SystemColors.GradientInactiveCaption;
-            this.ClientSize = new System.Drawing.Size(1270, 1093);
+            this.ClientSize = new System.Drawing.Size(1600, 910);
             this.Controls.Add(this.button_StandardOSettingPage);
             this.Controls.Add(this.button_TempStandardChangePage);
             this.Controls.Add(this.button_ThresholdChangePage);
@@ -170,8 +173,10 @@
             this.Controls.Add(this.button_Save);
             this.Controls.Add(this.pictureBox3);
             this.Controls.Add(this.panel_MainPage);
-            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
+            this.FormBorderStyle = System.Windows.Forms.FormBorderStyle.Sizable;
+            this.MaximizeBox = true;
+            this.MinimumSize = new System.Drawing.Size(1280, 720);
+            this.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen;
             this.Name = "StandardOParameterSetting";
             this.Text = "OffsetColdParameterSetting";
             ((System.ComponentModel.ISupportInitialize)(this.pictureBox3)).EndInit();
