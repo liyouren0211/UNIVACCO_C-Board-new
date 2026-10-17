@@ -178,6 +178,7 @@
       <DependentUpon>Form_ReAnalyze.cs</DependentUpon>
     </Compile>
     <Compile Include="StandardOPage\Utils\FontV15Algorithm.cs" />
+    <Compile Include="StandardOPage\Utils\NativeFontAlignment.cs" />
     <Compile Include="UNIVACCO.cs">
       <SubType>Form</SubType>
     </Compile>

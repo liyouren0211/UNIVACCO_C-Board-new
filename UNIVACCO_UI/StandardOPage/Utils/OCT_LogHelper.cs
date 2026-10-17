@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Diagnostics;
+using System.Threading;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -10,12 +12,13 @@ namespace StandardOPage
     public static class OCT_LogHelper
     {
         private static string ResultSavePath;    //儲存路徑
+        private static readonly object LogSync = new object();
 
         public static void Init(string system_messege_save_path)
         {
             ResultSavePath = system_messege_save_path;
         }
-        public static void WriteLog(LogLevel level, Page page, string message,string catcherror = "")
+        public static void WriteLog(LogLevel level, Page page, string message, string catcherror = "")
         {
             try
             {
@@ -61,21 +64,42 @@ namespace StandardOPage
                     Directory.CreateDirectory(dirName);
                 }
 
-                // 使用 StreamWriter 寫入日誌，避免多餘的 File.Create 操作
-                using (StreamWriter sw = new StreamWriter(fileName, true, Encoding.UTF8)) // UTF-8 編碼
+                // Keep all writers in this process serialized. FileShare.Read lets log viewers read.
+                // Retry transient sharing violations from OTHER processes (or application instances).
+                lock (LogSync)
                 {
-                    sw.WriteLine("{0} [{1}] {2}: {3}", DateTime.Now.ToLongTimeString(), emoji, pagename, message);
-                    // 如果有錯誤補充訊息，就寫入一行
-                    if (!string.IsNullOrWhiteSpace(catcherror))
+                    const int maxAttempts = 8;
+                    for (int attempt = 1; attempt <= maxAttempts; attempt++)
                     {
-                        sw.WriteLine("　↳ 錯誤詳情：{0}", catcherror);
+                        try
+                        {
+                            using (FileStream fs = new FileStream(fileName, FileMode.Append, FileAccess.Write, FileShare.Read))
+                            using (StreamWriter sw = new StreamWriter(fs, new UTF8Encoding(false)))
+                            {
+                                sw.WriteLine("{0} [{1}] {2}: {3}", DateTime.Now.ToLongTimeString(), emoji, pagename, message);
+                                if (!string.IsNullOrWhiteSpace(catcherror))
+                                    sw.WriteLine("　↳ 錯誤詳情：{0}", catcherror);
+                            }
+                            return;
+                        }
+                        catch (IOException ex)
+                        {
+                            // Windows error 32/33: sharing or locking violation.
+                            int code = System.Runtime.InteropServices.Marshal.GetHRForException(ex) & 0xFFFF;
+                            if ((code != 32 && code != 33) || attempt == maxAttempts)
+                            {
+                                Trace.WriteLine("Log write failed: " + ex);
+                                return;
+                            }
+                            Thread.Sleep(25 * attempt);
+                        }
                     }
                 }
             }
             catch (Exception ex)
             {
-                // 日誌寫入失敗時拋出清晰的錯誤
-                throw new IOException($"寫入日誌失敗，錯誤訊息: {ex.Message}", ex);
+                // 日誌是輔助功能；寫入失敗不可中止檢測。
+                Trace.WriteLine("Log write failed: " + ex);
             }
         }
     }

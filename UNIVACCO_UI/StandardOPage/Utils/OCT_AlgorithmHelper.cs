@@ -4624,9 +4624,27 @@ namespace StandardOPage
             }
             catch (Exception ex)
             {
-                OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "Yin FontV15 分析失敗", ex.ToString());
-                Debug.WriteLine($"[FontV15][Yin ERROR] {ex}");
-                return null;
+                Debug.WriteLine("[FontV15][Yin ERROR] " + ex);
+                string diagnosticPath = "";
+                try
+                {
+                    string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "FontAlignment_Debug");
+                    Directory.CreateDirectory(dir);
+                    diagnosticPath = Path.Combine(dir, "Yin_ERROR.txt");
+                    File.WriteAllText(diagnosticPath,
+                        "Time=" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + Environment.NewLine +
+                        "ExeDirectory=" + AppDomain.CurrentDomain.BaseDirectory + Environment.NewLine +
+                        ex.ToString(), Encoding.UTF8);
+                }
+                catch (Exception diagnosticError)
+                {
+                    Debug.WriteLine("[FontV15][Yin diagnostic failed] " + diagnosticError);
+                }
+                try { OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "Yin FontV15 分析失敗", ex.ToString()); }
+                catch (Exception logError) { Debug.WriteLine("[FontV15][Yin logging failed] " + logError); }
+                string detail = ex.GetType().Name + ": " + ex.Message;
+                if (!string.IsNullOrEmpty(diagnosticPath)) detail += Environment.NewLine + "詳細紀錄：" + diagnosticPath;
+                throw new InvalidOperationException("陰版字體分析失敗：" + detail, ex);
             }
         }
 

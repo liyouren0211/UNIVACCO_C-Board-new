@@ -364,23 +364,38 @@ namespace UNIVACCO_UI
             Update_MeshP(MeshP_Imgs, MeshP_Results);
         }
 
+        private string ResolveNativeGoldenDirectory()
+        {
+            string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+            DirectoryInfo dir = new DirectoryInfo(baseDir);
+            var checkedPaths = new List<string>();
+            while (dir != null)
+            {
+                string candidate = Path.Combine(dir.FullName, "templates", "golden_characters_v2_top_only");
+                checkedPaths.Add(candidate);
+                if (File.Exists(Path.Combine(candidate, "character_coordinates.csv")))
+                    return candidate;
+                dir = dir.Parent;
+            }
+            throw new FileNotFoundException("找不到新版字體金樣本：character_coordinates.csv。\n已搜尋：\n" +
+                string.Join("\n", checkedPaths));
+        }
+
         private async Task SystemProceess_FontArea(Mat sourceimg3, Mat sourceimg4)
         {
             Mat yinarea = new Mat(), yangarea = new Mat();
 
-            // ================================================================
-            // 0. 模板完整性檢查：3pt ~ 12pt 應各有 10 張
-            //    避免模板載入不完整時，後面以 YinTemplates[i] / YangTemplates[i]
-            //    取值造成 IndexOutOfRange 或分析直接回傳 null。
-            // ================================================================
-            if (YinTemplates == null || YinTemplates.Count != 10)
+            // NativeFontAlignment 使用 CSV + 字元 BMP 重建 Golden Sample。
+            // 不能再以舊版 Yin_template_3pt.bmp ~ 12pt.bmp 數量作為前置條件。
+            // 真正的字元與字級完整性由 GoldenCharacters.Load() 驗證。
+            string goldenDirectory = ResolveNativeGoldenDirectory();
+            foreach (string side in new[] { "Yin", "Yang" })
             {
-                throw new Exception($"陰版模板數量錯誤，目前={YinTemplates?.Count ?? 0}，正常應為 10 張（3pt~12pt）。");
-            }
-
-            if (YangTemplates == null || YangTemplates.Count != 10)
-            {
-                throw new Exception($"陽版模板數量錯誤，目前={YangTemplates?.Count ?? 0}，正常應為 10 張（3pt~12pt）。");
+                var loaded = GoldenCharacters.Load(goldenDirectory, side);
+                if (loaded.xoffsets.Count != 10)
+                    throw new InvalidDataException(side + " Golden Sample 字級不足 10 組（3pt~12pt）");
+                Debug.WriteLine($"[NativeFont][{side}] loaded {loaded.glyphs.Count} glyphs, " +
+                    $"width={loaded.reference.GetLength(1)}");
             }
 
             // ================================================================
