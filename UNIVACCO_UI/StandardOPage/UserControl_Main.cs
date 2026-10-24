@@ -1,32 +1,32 @@
-﻿using Microsoft.VisualBasic;
+﻿using Emgu.CV;
+using Emgu.CV.CvEnum;
+using Emgu.CV.Structure;
+using Emgu.CV.Util;
+using Microsoft.VisualBasic;
+using MySqlX.XDevAPI.Common;
+using new_UNIVACCO;
+using NPOI.OpenXml4Net.OPC.Internal;
+using NPOI.SS.Formula.PTG;
+using NPOI.XWPF.UserModel;
+using OfficeOpenXml.FormulaParsing.Excel.Functions.Text;
+using StandardOPage;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
-using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 using System.Data.SQLite;
 using System.Diagnostics;
-using Emgu.CV.CvEnum;
-using Emgu.CV.Structure;
-using Emgu.CV.Util;
-using Emgu.CV;
-using System.IO;
-using System.Threading;
+using System.Drawing;
 using System.Drawing.Imaging;
-using NPOI.XWPF.UserModel;
-using Excel = Microsoft.Office.Interop.Excel;
-using static NPOI.HSSF.Util.HSSFColor;
-using MySqlX.XDevAPI.Common;
-using StandardOPage;
-using OfficeOpenXml.FormulaParsing.Excel.Functions.Text;
+using System.IO;
+using System.Linq;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Windows.Forms;
 using System.Windows.Media.Media3D;
-using new_UNIVACCO;
-using NPOI.OpenXml4Net.OPC.Internal;
-using NPOI.SS.Formula.PTG;
+using static NPOI.HSSF.Util.HSSFColor;
+using Excel = Microsoft.Office.Interop.Excel;
 
 namespace UNIVACCO_UI
 {
@@ -114,6 +114,115 @@ namespace UNIVACCO_UI
         private Mat BreakArea_02_crop;
         private Mat BreakArea_03_crop;
         private Mat fullness_area;
+
+        // 檢測中提示列：Marquee 表示仍在執行，不代表已完成百分比。
+        private Panel inspectionStatusPanel;
+        private Label inspectionStatusLabel;
+        private Label inspectionTimeLabel;
+        private ProgressBar inspectionProgress;
+        private System.Windows.Forms.Timer inspectionUiTimer;
+        private Stopwatch inspectionWatch;
+        private bool inspectionRunning;
+
+        private void StartInspectionStatus()
+        {
+            if (inspectionRunning) return;
+            inspectionRunning = true;
+            button_Start.Enabled = false; // 避免重複啟動
+            if (inspectionStatusPanel == null || inspectionStatusPanel.IsDisposed)
+            {
+                // 上方米色區塊是 UNIVACCO 主視窗，不是 UserControl_Main。
+                // 直接掛在主視窗上，避免 Dock.Bottom 壓縮下方檢測表格。
+                inspectionStatusPanel = new Panel
+                {
+                    Left = 405,
+                    Top = 10,
+                    Width = 560,
+                    Height = 48,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left,
+                    BackColor = Color.FromArgb(248, 234, 214),
+                    Visible = false
+                };
+                inspectionStatusLabel = new Label
+                {
+                    Left = 6,
+                    Top = 1,
+                    Width = 415,
+                    Height = 20,
+                    AutoEllipsis = true,
+                    ForeColor = Color.FromArgb(35, 50, 65),
+                    Font = new Font("Microsoft JhengHei", 9F, FontStyle.Bold),
+                    Text = "檢測準備中..."
+                };
+                inspectionTimeLabel = new Label
+                {
+                    Left = 425,
+                    Top = 2,
+                    Width = 130,
+                    Height = 18,
+                    TextAlign = System.Drawing.ContentAlignment.MiddleRight,
+                    ForeColor = Color.FromArgb(35, 50, 65),
+                    Text = "已執行 00:00"
+                };
+                inspectionProgress = new ProgressBar
+                {
+                    Left = 6,
+                    Top = 25,
+                    Width = 548,
+                    Height = 13,
+                    Style = ProgressBarStyle.Marquee,
+                    MarqueeAnimationSpeed = 25
+                };
+                inspectionStatusPanel.Controls.Add(inspectionStatusLabel);
+                inspectionStatusPanel.Controls.Add(inspectionTimeLabel);
+                inspectionStatusPanel.Controls.Add(inspectionProgress);
+                MainPage.Controls.Add(inspectionStatusPanel);
+                inspectionStatusPanel.BringToFront();
+            }
+            inspectionStatusPanel.Visible = true;
+            inspectionStatusPanel.BringToFront();
+            inspectionProgress.Style = ProgressBarStyle.Marquee;
+            inspectionProgress.MarqueeAnimationSpeed = 25;
+            inspectionWatch = Stopwatch.StartNew();
+            if (inspectionUiTimer == null)
+            {
+                inspectionUiTimer = new System.Windows.Forms.Timer { Interval = 500 };
+                inspectionUiTimer.Tick += (sender, args) =>
+                {
+                    if (inspectionRunning && inspectionWatch != null)
+                    {
+                        string elapsedText = "已執行 " + inspectionWatch.Elapsed.ToString(@"mm\:ss");
+                        if (inspectionTimeLabel.Text != elapsedText)
+                            inspectionTimeLabel.Text = elapsedText;
+                    }
+                };
+            }
+            inspectionUiTimer.Start();
+            SetInspectionStage("準備拍攝 / 等待定位確認");
+        }
+
+        private void SetInspectionStage(string stage)
+        {
+            if (!inspectionRunning || IsDisposed) return;
+            if (InvokeRequired)
+            {
+                BeginInvoke(new Action(() => SetInspectionStage(stage)));
+                return;
+            }
+            string stageText = "檢測中｜" + stage;
+            if (inspectionStatusLabel.Text != stageText)
+                inspectionStatusLabel.Text = stageText;
+        }
+
+        private void StopInspectionStatus()
+        {
+            if (!inspectionRunning) return;
+            inspectionRunning = false;
+            if (inspectionUiTimer != null) inspectionUiTimer.Stop();
+            if (inspectionWatch != null) inspectionWatch.Stop();
+            if (inspectionStatusPanel != null) inspectionStatusPanel.Visible = false;
+            button_Start.Enabled = true;
+        }
 
         #region 初始化
         public UserControl_Main(UNIVACCO _MainPage)
@@ -530,6 +639,12 @@ namespace UNIVACCO_UI
         /// </summary>
         private Task<(Mat, Mat)> CropYinYangArea(Mat fontarea)
         {
+            // Valley 平均值及 Gaussian 大量迴圈不應阻塞 UI 執行緒。
+            return Task.Run(() => CropYinYangAreaCore(fontarea));
+        }
+
+        private (Mat, Mat) CropYinYangAreaCore(Mat fontarea)
+        {
             const int yangWidth = 2120;
             const int yinWidth = 2080;
 
@@ -663,7 +778,7 @@ namespace UNIVACCO_UI
                         $"[YinYang Valley] Rotate OK: Yin={yinRotated.Width}x{yinRotated.Height}, " +
                         $"Yang={yangRotated.Width}x{yangRotated.Height}");
 
-                    return Task.FromResult((yinRotated, yangRotated));
+                    return (yinRotated, yangRotated);
                 }
                 finally
                 {
@@ -789,7 +904,7 @@ namespace UNIVACCO_UI
 
             Mat kernel = CvInvoke.GetStructuringElement(ElementShape.Rectangle, new Size(13, 13), new Point(-1, -1));
             Mat opened = new Mat();
-            CvInvoke.MorphologyEx(firstimg, opened, MorphOp.Open, kernel, new Point(-1, -1), 1, BorderType.Default, new MCvScalar());
+            CvInvoke.MorphologyEx(firstimg, opened, MorphOp.Open, kernel, new Point(-1, -1), 1, Emgu.CV.CvEnum.BorderType.Default, new MCvScalar());
             CvInvoke.Imwrite("calcmovebias_02_opened.bmp", opened);
 
             int leftBoundary = 0;
@@ -973,6 +1088,7 @@ namespace UNIVACCO_UI
             {
                 try
                 {
+                    StartInspectionStatus();
                     ClearPictureBox_SourceImg();
                     ClearUI();
                     Update();
@@ -997,6 +1113,7 @@ namespace UNIVACCO_UI
                         if (result == DialogResult.Cancel) return;
                     }
 
+                    SetInspectionStage("定位影像拍攝及角度計算");
                     // 1. 首次拍攝計算偏差與斜率（失敗時降級為預設值 0 繼續執行）
                     int movebias = 0;
                     double rotationAngle = 0.0;
@@ -1004,31 +1121,35 @@ namespace UNIVACCO_UI
                     try
                     {
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(500);
+                        await Task.Delay(500);
 
                         if (pictureBox_SourceImage.Image != null)
                         {
                             SourceImage0 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                             CvInvoke.Imwrite("SourceImage_first.bmp", SourceImage0);
 
-                            var result = calc_motor_movebias(SourceImage0.Clone());
-
-                            movebias = result.movebias;
-
-                            const double MAX_VALID_ROTATION = 1.0;
-
-                            if (Math.Abs(result.rotationAngle) <= MAX_VALID_ROTATION)
+                            // 使用獨立影像副本供背景定位運算，避免阻塞進度動畫。
+                            using (Mat positionImage = SourceImage0.Clone())
                             {
-                                rotationAngle = result.rotationAngle;
+                                var result = await Task.Run(() => calc_motor_movebias(positionImage));
+
+                                movebias = result.movebias;
+
+                                const double MAX_VALID_ROTATION = 1.0;
+
+                                if (Math.Abs(result.rotationAngle) <= MAX_VALID_ROTATION)
+                                {
+                                    rotationAngle = result.rotationAngle;
+                                }
+                                else
+                                {
+                                    rotationAngle = 0.0;
+                                }
+                                Debug.WriteLine(
+                                    $"[定位測試] 原始計算角度 = {result.rotationAngle:F3}°, " +
+                                    $"實際套用角度 = {rotationAngle:F3}°"
+                                );
                             }
-                            else
-                            {
-                                rotationAngle = 0.0;
-                            }
-                            Debug.WriteLine(
-                                $"[定位測試] 原始計算角度 = {result.rotationAngle:F3}°, " +
-                                $"實際套用角度 = {rotationAngle:F3}°"
-                            );
                         }
                     }
                     catch (Exception ex)
@@ -1041,6 +1162,7 @@ namespace UNIVACCO_UI
                     // 2. 依序拍攝各站點照片並顯示至 UI
                     try
                     {
+                        SetInspectionStage("拍攝第 1/5 站");
                         // 站點 1
                         // 站點 1 (只有 movebias 大於 0 才移動馬達，為 0 或負數則直接原地拍攝)
                         if (movebias > 0)
@@ -1050,57 +1172,63 @@ namespace UNIVACCO_UI
                         }
 
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(400);
+                        await Task.Delay(400);
                         RawImage1 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage1 = RawImage1.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         pictureBox_1.Image = SourceImage1.ToBitmap();
                         CvInvoke.Imwrite("SourceImage_O1.bmp", SourceImage1);
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(400);
+                        await Task.Delay(400);
                         RawImage1 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage1 = RawImage1.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         pictureBox_1.Image = SourceImage1.ToBitmap();
                         CvInvoke.Imwrite("SourceImage_O1.bmp", SourceImage1);
 
+                        SetInspectionStage("拍攝第 2/5 站");
                         // 站點 2
                         await MainPage.arduino.SpecificRightMoveAsync(2350);
                         await Task.Delay(200);
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(400);
+                        await Task.Delay(400);
                         RawImage2 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage2 = RawImage2.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         pictureBox_2.Image = SourceImage2.ToBitmap();
                         CvInvoke.Imwrite("SourceImage_O2.bmp", SourceImage2);
 
+                        SetInspectionStage("網點分析已啟動，繼續拍攝");
                         var task_meshp = SystemProceess_MeshP(SourceImage1, SourceImage2);
 
+                        SetInspectionStage("拍攝第 3/5 站");
                         // 站點 3
                         await MainPage.arduino.SpecificRightMoveAsync(2100);
                         await Task.Delay(200);
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(400);
+                        await Task.Delay(400);
                         RawImage3 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage3 = RawImage3.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         pictureBox_3.Image = SourceImage3.ToBitmap();
                         CvInvoke.Imwrite("SourceImage_O3.bmp", SourceImage3);
 
+                        SetInspectionStage("拍攝第 4/5 站");
                         // 站點 4
                         await MainPage.arduino.SpecificRightMoveAsync(1900);
                         await Task.Delay(200);
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(400);
+                        await Task.Delay(400);
                         RawImage4 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage4 = RawImage4.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         pictureBox_4.Image = SourceImage4.ToBitmap();
                         CvInvoke.Imwrite("SourceImage_O4.bmp", SourceImage4);
 
+                        SetInspectionStage("字體分析已啟動，繼續拍攝");
                         var task_fontarea = SystemProceess_FontArea(SourceImage3, SourceImage4);
 
+                        SetInspectionStage("拍攝第 5/5 站");
                         // 站點 5
                         await MainPage.arduino.SpecificRightMoveAsync(2400);
                         await Task.Delay(200);
                         MainPage.camera.CaptureOneFrame();
-                        Thread.Sleep(400);
+                        await Task.Delay(400);
                         RawImage5 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage5 = RawImage5.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         CvInvoke.Imwrite("SourceImage_O5.bmp", SourceImage5);
@@ -1112,6 +1240,7 @@ namespace UNIVACCO_UI
                             await MainPage.ArduinoCloseValve();
                         await MainPage.arduino.GoHomeAsync();
 
+                        SetInspectionStage("等待網點、字體、飽滿度分析完成");
                         await Task.WhenAll(task_meshp, task_fontarea, task_fullnessarea);
 
                         try
@@ -1122,7 +1251,9 @@ namespace UNIVACCO_UI
 
                             if (BreakArea_01_crop != null && BreakArea_02_crop != null && BreakArea_03_crop != null)
                             {
-                                OCT_AlgorithmHelper.BreakArea_Process(BreakArea_01_crop, BreakArea_02_crop, BreakArea_03_crop, breakAreaParams);
+                                SetInspectionStage("破開區分析 / 彙整結果");
+                                await Task.Run(() => OCT_AlgorithmHelper.BreakArea_Process(
+                                    BreakArea_01_crop, BreakArea_02_crop, BreakArea_03_crop, breakAreaParams));
                             }
                         }
                         catch { }
@@ -1132,6 +1263,7 @@ namespace UNIVACCO_UI
                         button_Output.Enabled = true;
 
                         Label_Add_ClickEvent(MeshP_Imgs, Yin_Imgs, Yang_Imgs, fullness_area);
+                        StopInspectionStatus();
                         MessageBox.Show("樣品拍攝與分析完成！請輸入「品名」後點擊「儲存檔案」存檔。", "系統資訊", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     }
                     catch (Exception ex)
@@ -1144,6 +1276,7 @@ namespace UNIVACCO_UI
                 }
                 finally
                 {
+                    StopInspectionStatus();
                     MainPage.ArduinoCloseGreenLight();
                     if (IsValveEnabled)
                     {
