@@ -2359,7 +2359,60 @@ namespace StandardOPage
         /// <summary>
         /// 陰版雜點濾除
         /// </summary>
-        public static Mat Yin_filternoise(Mat source, string fontsize)
+        /// <summary>
+        /// Preview-only copy of the existing production FONT threshold stages.
+        /// No production image or AOI settings are mutated.
+        /// The caller owns the returned Mat. Font ROI must come from the previous
+        /// inspection's unthresholded Yin_Imgs / Yang_Imgs.
+        /// </summary>
+        public static Mat BuildFontThresholdPreview(Mat rawFontRoi, bool isYin, int pointSize, double threshold)
+        {
+            if (rawFontRoi == null || rawFontRoi.IsEmpty)
+                throw new ArgumentException("Font preview source is empty", "rawFontRoi");
+            if (pointSize < 3 || pointSize > 12)
+                throw new ArgumentOutOfRangeException("pointSize");
+            threshold = Math.Max(0.0, Math.Min(255.0, threshold));
+
+            // The production inspection's MakeTemplates special mode uses fixed
+            // values (Yin=110, Yang=180) and deliberately ignores UI thresholds.
+            // This preview models ordinary INSPECTION mode, not template creation.
+            Mat working = rawFontRoi.Clone();
+            try
+            {
+                if (isYin)
+                {
+                    if (working.NumberOfChannels != 3)
+                        throw new InvalidOperationException("Yin font ROI is not the original 3-channel image; run inspection before previewing.");
+                    Mat denoised = Yin_filternoise(working, pointSize.ToString() + "pt", threshold);
+                    // Yin_filternoise returns the same input Mat after editing it.
+                    using (Mat gray = new Mat())
+                    {
+                        CvInvoke.CvtColor(denoised, gray, ColorConversion.Bgr2Gray);
+                        CvInvoke.Threshold(gray, gray, threshold, 255, ThresholdType.Binary);
+                        // Exactly the stage used in normal Yin production analysis;
+                        // do not include later resizing/defect comparison in preview.
+                        return RemoveIsolatedWhitePixels(gray.Clone());
+                    }
+                }
+
+                Mat binary = new Mat();
+                if (working.NumberOfChannels == 1)
+                    working.CopyTo(binary);
+                else if (working.NumberOfChannels == 3)
+                    CvInvoke.CvtColor(working, binary, ColorConversion.Bgr2Gray);
+                else
+                    throw new InvalidOperationException("Unsupported font ROI channels: " + working.NumberOfChannels);
+                try
+                {
+                    CvInvoke.Threshold(binary, binary, threshold, 255, ThresholdType.Binary);
+                    return binary;
+                }
+                catch { binary.Dispose(); throw; }
+            }
+            finally { working.Dispose(); }
+        }
+
+        public static Mat Yin_filternoise(Mat source, string fontsize, double filterThreshold = 150)
         {
             Dictionary<string, int> fontSizeToThreshold = new Dictionary<string, int>
             {
@@ -2379,7 +2432,10 @@ namespace StandardOPage
 
             Mat processimg = source.Clone();
             CvInvoke.CvtColor(processimg, processimg, ColorConversion.Bgr2Gray);
-            CvInvoke.Threshold(processimg, processimg, 150, 255, ThresholdType.Binary);
+            // Use the same engineering font threshold for noise-region segmentation.
+            // Otherwise a fixed 150 binary mask discards grayscale variations and
+            // lower UI settings (e.g. 20-40%) appear to have no visible effect.
+            CvInvoke.Threshold(processimg, processimg, filterThreshold, 255, ThresholdType.Binary);
 
             using (Mat hierarchy = new Mat())
             {
@@ -3514,7 +3570,7 @@ namespace StandardOPage
                     }
                     else
                     {
-                        filter_yin_image = Yin_filternoise(yin_image.Clone(), fontName);
+                        filter_yin_image = Yin_filternoise(yin_image.Clone(), fontName, current_threshold);
                         if (saveoptions.saveoption.Yin_FilterNoise)
                         {
                             filter_yin_image.Save($"Yin_filternoise_{fontName}.bmp");

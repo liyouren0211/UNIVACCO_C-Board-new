@@ -51,7 +51,7 @@ namespace UNIVACCO_UI
         private void BuildUI()
         {
             Text = "AOI 即時預覽";
-            StartPosition = FormStartPosition.CenterScreen;
+            StartPosition = FormStartPosition.Manual;
             ClientSize = new Size(1000, 760);
             MinimumSize = new Size(500, 400);
             MaximizeBox = true;
@@ -79,6 +79,50 @@ namespace UNIVACCO_UI
             Controls.Add(pictureBoxPreview);
 
             FormClosed += Form_LivePreview_FormClosed;
+
+            // 只控制視窗位置，不改任何預覽影像或門檻計算。
+            Shown += delegate { ArrangeOnRightOfOwner(); };
+        }
+
+        /// <summary>
+        /// 將預覽視窗安排在工程設定視窗右方。
+        /// 依目前螢幕工作區縮放預覽大小，避免覆蓋左側參數。
+        /// </summary>
+        private void ArrangeOnRightOfOwner()
+        {
+            Form setting = Owner;
+            Screen monitor = setting != null ? Screen.FromControl(setting) : Screen.FromControl(this);
+            Rectangle area = monitor.WorkingArea;
+            int gap = 8;
+            int leftEdge = setting != null ? Math.Max(area.Left, setting.Right) : area.Left + area.Width / 2;
+            int availableWidth = area.Right - leftEdge - gap;
+
+            // 螢幕空間不足時，先縮小工程窗（僅改視窗大小，不改內容）。
+            if (setting != null && availableWidth < 480)
+            {
+                int targetSettingWidth = Math.Max(700, area.Width - 480 - gap);
+                if (setting.Width > targetSettingWidth)
+                {
+                    setting.Width = targetSettingWidth;
+                    setting.Location = new Point(area.Left, area.Top);
+                    leftEdge = setting.Right;
+                    availableWidth = area.Right - leftEdge - gap;
+                }
+            }
+
+            if (availableWidth >= 400)
+            {
+                WindowState = FormWindowState.Normal;
+                // MinimumSize=500x400（含視窗邊框），優先安排左右並排。
+                int width = Math.Max(500, Math.Min(1000, availableWidth));
+                Size = new Size(width, Math.Min(800, area.Height));
+                Location = new Point(Math.Max(area.Left, area.Right - width), area.Top);
+            }
+            else
+            {
+                // 極窄的螢幕無法同時放下兩個可用視窗，優先確保預覽可見。
+                Location = new Point(Math.Max(area.Left, area.Right - Width), area.Top);
+            }
         }
 
         /// <summary>
@@ -134,16 +178,25 @@ namespace UNIVACCO_UI
                 {
                     ToGray(source, gray);
 
-                    CvInvoke.Threshold(
-                        gray,
-                        binary,
-                        thresholdPercent * 2.55,
-                        255,
-                        ThresholdType.Binary);
-
+                    CvInvoke.Threshold(gray, binary, thresholdPercent * 2.55,
+                        255, ThresholdType.Binary);
+                    // Native formal detection normalizes both sides to white foreground.
+                    if (!isYin) CvInvoke.BitwiseNot(binary, binary);
+                    Text = (isYin ? "陰版" : "陽版") + " " + pointSize + "pt | "
+                        + thresholdPercent.ToString("F1") + "% | T="
+                        + (thresholdPercent * 2.55).ToString("F1")
+                        + " | 原始灰階 [" + GrayMin(gray) + "]";
                     ShowBitmap(binary.ToBitmap());
                 }
             }
+        }
+
+        private string GrayMin(Mat gray)
+        {
+            double min = 0, max = 0;
+            Point minLoc = Point.Empty, maxLoc = Point.Empty;
+            CvInvoke.MinMaxLoc(gray, ref min, ref max, ref minLoc, ref maxLoc);
+            return min.ToString("F0") + "~" + max.ToString("F0");
         }
 
         /// <summary>

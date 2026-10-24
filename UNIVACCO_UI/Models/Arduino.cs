@@ -26,7 +26,7 @@ namespace new_UNIVACCO
         // 用於緩衝不完整的序列埠資料，因為 Arduino 的回應是逐行發送的
         private StringBuilder serialBuffer = new StringBuilder();
 
-        public Arduino(string portName = "COM6", int baudRate = 115200, double pixelperpulse = 2)
+        public Arduino(string portName = "COM7", int baudRate = 115200, double pixelperpulse = 2)
         {
             this.pixelperpulse = pixelperpulse;
             serialPort = new SerialPort(portName, baudRate)

@@ -16,6 +16,15 @@ using System.Threading;
 // ===== GoldenCharacters.cs =====
 namespace StandardOPage
 {
+
+    public static class FontRoiBoxDebugSettings
+    {
+        // 只影響額外輸出圖片，不改變對位與瑕疵判斷。
+        public const bool Enabled = true;
+        // 與目前呼叫 BandMatch 時使用的 yRadius = 12 一致。
+        public const int SearchYRadius = 12;
+    }
+
     // ================================================================
     // 字體 Closing 設定：只需要修改這裡，不必動下面的演算法。
     // ================================================================
@@ -23,7 +32,7 @@ namespace StandardOPage
     {
         // 指定要使用 Closing 的字級，可自由增刪，例如 { 9, 10, 11, 12 }。
         // 設為空集合 new HashSet<int>() 即全部不做 Closing。
-        public static readonly HashSet<int> EnabledFontPts = new HashSet<int> { 7,8, 9, 10, 11, 12 };
+        public static readonly HashSet<int> EnabledFontPts = new HashSet<int> { 7, 8, 9, 10, 11, 12 };
 
         // 必須是奇數且 >= 1，例如 3、5、7；1 代表無實際形態學變化。
         public const int KernelSize = 5;
@@ -555,10 +564,85 @@ namespace StandardOPage
             public string Side, Group;
             public int StripStartX;
             public double EccRotation;
-            public byte[,] Golden, Aligned;
+            public byte[,] Golden, Aligned, AlignedGray;
             public List<CharacterResult> Characters = new List<CharacterResult>();
         }
         // Diagnostic output only. Does not change matching, scoring, acceptance or parallel work.
+        // DEBUG ONLY: visualize the CSV Golden ROI and the search envelope for each glyph.
+        // All rectangles are drawn on a COPY of the already computed overlay.
+        private static void SaveGlyphRoiBoxes(GroupResult group, string mode)
+        {
+            if (!FontRoiBoxDebugSettings.Enabled) return;
+            try
+            {
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    "FontAlignment_ROI_Debug", mode, group.Side, group.Group);
+                Directory.CreateDirectory(root);
+                int w = group.Golden.GetLength(1), h = group.Golden.GetLength(0);
+                var frame = new Rectangle(0, 0, w, h);
+                var csv = new StringBuilder("side,group,font_pt,char_index,roi_x,roi_y,roi_width,roi_height,search_x,search_y,search_width,search_height,best_dx,best_dy,used_dx,used_dy,accepted");
+                csv.AppendLine();
+                using (Mat overlay = CharacterBandMatcher.BuildFinalOverlay(group.Golden, group.Aligned))
+                {
+                    foreach (var ptGroup in group.Characters.GroupBy(c => c.FontPt).OrderBy(g => g.Key))
+                    {
+                        using (Mat ptCanvas = overlay.Clone())
+                        {
+                            foreach (CharacterResult row in ptGroup)
+                            {
+                                var m = row.Alignment;
+                                if (m == null) continue;
+                                Rectangle roi = Rectangle.Intersect(frame, m.GoldenRoi);
+                                int radiusX = m.SearchRadiusUsed;
+                                // The current normal per-character vertical search radius is 12 px.
+                                int radiusY = FontRoiBoxDebugSettings.SearchYRadius;
+                                Rectangle search = Rectangle.Intersect(frame,
+                                    new Rectangle(m.GoldenRoi.X - radiusX, m.GoldenRoi.Y - radiusY,
+                                        m.GoldenRoi.Width + 2 * radiusX,
+                                        m.GoldenRoi.Height + 2 * radiusY));
+                                // BGR blue: candidate search envelope. Yellow: Golden CSV ROI.
+                                if (search.Width > 0 && search.Height > 0)
+                                    CvInvoke.Rectangle(ptCanvas, search, new MCvScalar(255, 150, 0), 1);
+                                if (roi.Width > 0 && roi.Height > 0)
+                                    CvInvoke.Rectangle(ptCanvas, roi, new MCvScalar(0, 255, 255), 1);
+                                string label = row.FontPt.ToString(CultureInfo.InvariantCulture) + "pt #" +
+                                    row.CharacterIndex.ToString(CultureInfo.InvariantCulture);
+                                if (roi.Width > 0 && roi.Height > 0)
+                                    CvInvoke.PutText(ptCanvas, label,
+                                        new Point(roi.X, Math.Max(11, roi.Y - 3)),
+                                        FontFace.HersheySimplex, 0.36, new MCvScalar(255, 255, 255), 1);
+                                csv.AppendLine(string.Join(",", new[] {
+                                group.Side, group.Group,
+                                row.FontPt.ToString(CultureInfo.InvariantCulture),
+                                row.CharacterIndex.ToString(CultureInfo.InvariantCulture),
+                                m.GoldenRoi.X.ToString(CultureInfo.InvariantCulture),
+                                m.GoldenRoi.Y.ToString(CultureInfo.InvariantCulture),
+                                m.GoldenRoi.Width.ToString(CultureInfo.InvariantCulture),
+                                m.GoldenRoi.Height.ToString(CultureInfo.InvariantCulture),
+                                search.X.ToString(CultureInfo.InvariantCulture),
+                                search.Y.ToString(CultureInfo.InvariantCulture),
+                                search.Width.ToString(CultureInfo.InvariantCulture),
+                                search.Height.ToString(CultureInfo.InvariantCulture),
+                                m.BestDx.ToString(CultureInfo.InvariantCulture),
+                                m.BestDy.ToString(CultureInfo.InvariantCulture),
+                                m.UsedDx.ToString(CultureInfo.InvariantCulture),
+                                m.UsedDy.ToString(CultureInfo.InvariantCulture),
+                                m.Accepted ? "1" : "0" }));
+                            }
+                            ptCanvas.Save(Path.Combine(root,
+                                ptGroup.Key.ToString("00", CultureInfo.InvariantCulture) + "pt_ROI_BOXES.png"));
+                        }
+                    }
+                }
+                File.WriteAllText(Path.Combine(root, "ROI_BOXES.csv"), csv.ToString(), new UTF8Encoding(true));
+                Debug.WriteLine("[NativeFont][ROI] saved " + root);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[NativeFont][ROI] debug-only export failed: " + ex.Message);
+            }
+        }
+
         private static void SaveLargeADiagnostics(GroupResult group, string mode)
         {
             // Bottom-most index is the first alphabetical A in each vertical font column.
@@ -828,13 +912,29 @@ namespace StandardOPage
             }
         }
 
+        // Preserve the original grayscale Test under exactly the transform used for
+        // the binary group alignment. This does not change matching or scoring.
+        private static byte[,] WarpOriginalGray(byte[,] gray, double[,] inverse,
+            int w, int h, bool isYin)
+        {
+            using (Mat src = CharacterBandMatcher.WriteGray(gray))
+            using (Mat output = new Mat())
+            using (var m = FloatMatrix(inverse))
+            {
+                CvInvoke.WarpAffine(src, output, m, new Size(w, h), Inter.Nearest,
+                    Emgu.CV.CvEnum.Warp.Default, BorderType.Constant,
+                    new MCvScalar(isYin ? 0 : 255));
+                return CharacterBandMatcher.ReadGray(output);
+            }
+        }
+
         // Process-wide budget: Yin and Yang may run concurrently. Restrict the
         // aggregate CPU-heavy glyph matches instead of allowing 4 + 4 workers.
         // This semaphore is shared across both sides, even when Analyze is
         // called from different application threads.
         private static readonly SemaphoreSlim GlyphCpuBudget = new SemaphoreSlim(4, 4);
 
-        private static (byte[,] aligned, double angle) EccRigid(byte[,] golden, byte[,] test, string side, string group, double scale = .33)
+        private static (byte[,] aligned, byte[,] gray, double angle) EccRigid(byte[,] golden, byte[,] test, byte[,] originalGray, string side, string group, double scale = .33)
         {
             var totalTimer = Stopwatch.StartNew();
             long prepMs = 0, phaseMs = 0, scoringMs = 0, warpMs = 0, eccMs = 0;
@@ -899,7 +999,7 @@ namespace StandardOPage
                     + ", finalWarp=" + warpMs + ", other=" + Math.Max(0, totalTimer.ElapsedMilliseconds - prepMs - phaseMs - eccMs - scoringMs - warpMs)
                     + ", total=" + totalTimer.ElapsedMilliseconds + ", converged=" + converged + ", failed=" + failed
                     + ", small=" + sw + "x" + sh);
-                return (aligned, rotation);
+                return (aligned, WarpOriginalGray(originalGray, Invert(M), w, h, side == "Yin"), rotation);
             }
         }
         // Default to NCC-only group translation for production evaluation.
@@ -916,8 +1016,8 @@ namespace StandardOPage
         // TM_CCORR_NORMED, translation only (no rotation or scaling).
         // Transform returned by that Python function is Golden->Test; apply
         // its inverse (Test->Golden) when warping the actual Test image.
-        private static (byte[,] aligned, double angle) NccTranslation(
-            byte[,] golden, byte[,] test, string side, string group,
+        private static (byte[,] aligned, byte[,] gray, double angle) NccTranslation(
+            byte[,] golden, byte[,] test, byte[,] originalGray, string side, string group,
             double scale = .33, int radius = 60)
         {
             var timer = Stopwatch.StartNew();
@@ -956,7 +1056,7 @@ namespace StandardOPage
                         + ", dy=" + dy.ToString("F3", CultureInfo.InvariantCulture)
                         + ", score=" + max.ToString("F6", CultureInfo.InvariantCulture)
                         + ", small=" + sw + "x" + sh);
-                    return (aligned, 0.0);
+                    return (aligned, WarpOriginalGray(originalGray, inverse, w, h, side == "Yin"), 0.0);
                 }
             }
         }
@@ -973,8 +1073,11 @@ namespace StandardOPage
             {
                 if (alreadyCroppedArea.NumberOfChannels == 1) alreadyCroppedArea.CopyTo(srcGray);
                 else CvInvoke.CvtColor(alreadyCroppedArea, srcGray, ColorConversion.Bgr2Gray);
-                byte[,] imagebin = GoldenCharacters.Binary(CharacterBandMatcher.ReadGray(srcGray), side == "Yin");
+                byte[,] fullGray = CharacterBandMatcher.ReadGray(srcGray);
+                byte[,] imagebin = GoldenCharacters.Binary(fullGray, side == "Yin");
                 var coarse = Coarse(imagebin, refbin);
+                byte[,] coarseGray = CharacterBandMatcher.Slice(fullGray, coarse.startX, 0,
+                    refbin.GetLength(1), fullGray.GetLength(0));
                 Debug.WriteLine("[NativeFont][" + side + "] coarse elapsed ms=" + watch.ElapsedMilliseconds);
                 var results = new List<GroupResult>();
                 foreach (string group in new[] { "A", "B" })
@@ -985,12 +1088,13 @@ namespace StandardOPage
                     int len = right - left, height = refbin.GetLength(0);
                     byte[,] g = CharacterBandMatcher.Slice(refbin, left, 0, len, height);
                     byte[,] t = CharacterBandMatcher.Slice(coarse.strip, left, 0, len, coarse.strip.GetLength(0));
+                    byte[,] tGray = CharacterBandMatcher.Slice(coarseGray, left, 0, len, coarseGray.GetLength(0));
                     Stopwatch eccWatch = Stopwatch.StartNew();
                     string alignMode = GroupAlignmentMode();
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] alignment mode=" + alignMode);
                     var ecc = alignMode == "ECC"
-                        ? EccRigid(g, t, side, group, eccScale)
-                        : NccTranslation(g, t, side, group, eccScale);
+                        ? EccRigid(g, t, tGray, side, group, eccScale)
+                        : NccTranslation(g, t, tGray, side, group, eccScale);
                     eccWatch.Stop();
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] " + alignMode + " stage ms=" + eccWatch.ElapsedMilliseconds
                         + ", cumulative ms=" + watch.ElapsedMilliseconds);
@@ -1000,9 +1104,14 @@ namespace StandardOPage
                         Group = group,
                         Golden = g,
                         Aligned = new byte[height, len],
+                        AlignedGray = new byte[height, len],
                         EccRotation = ecc.angle,
                         StripStartX = coarse.startX
                     };
+                    // Yang background must remain 255 BEFORE inverted binary thresholding.
+                    if (side == "Yang")
+                        for (int y = 0; y < height; y++)
+                            for (int x = 0; x < len; x++) result.AlignedGray[y, x] = 255;
                     // Every glyph has an independent search, so compute matches concurrently.
                     // Never write to GroupResult/Aligned from worker threads. A deterministic
                     // single-threaded merge retains the original CSV/character ordering.
@@ -1053,12 +1162,19 @@ namespace StandardOPage
                         });
                         for (int y = 0; y < roi.Height; y++)
                             for (int x = 0; x < roi.Width; x++)
+                            {
                                 result.Aligned[roi.Y + y, roi.X + x] = match.Used[y, x];
+                                int sy = roi.Y + match.UsedDy + y;
+                                int sx = roi.X + match.UsedDx + x;
+                                if (sy >= 0 && sy < ecc.gray.GetLength(0) && sx >= 0 && sx < ecc.gray.GetLength(1))
+                                    result.AlignedGray[roi.Y + y, roi.X + x] = ecc.gray[sy, sx];
+                            }
                     }
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] parallel glyph ms="
                         + glyphWatch.ElapsedMilliseconds + ", workers=" + workerCount + ", globalMax=4");
                     results.Add(result);
                     SaveLargeADiagnostics(result, alignMode);
+                    SaveGlyphRoiBoxes(result, alignMode);
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] characters=" + result.Characters.Count + ", total elapsed ms=" + watch.ElapsedMilliseconds);
                 }
                 return results;

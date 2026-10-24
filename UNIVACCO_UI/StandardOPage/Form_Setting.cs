@@ -53,7 +53,12 @@ namespace UNIVACCO_UI
             int targetHeight = Math.Min(850, Math.Max(620, workingArea.Height - 40));
 
             ClientSize = new Size(targetWidth, targetHeight);
-            StartPosition = FormStartPosition.CenterScreen;
+            // 工程設定視窗固定在目前螢幕工作區左側（保留工作列空間）。
+            StartPosition = FormStartPosition.Manual;
+            int sideBySideWidth = Math.Max(760, workingArea.Width / 2);
+            if (ClientSize.Width > sideBySideWidth)
+                ClientSize = new Size(sideBySideWidth, ClientSize.Height);
+            Location = new Point(workingArea.Left, workingArea.Top);
             MaximizeBox = true;
 
             // 上方工具列維持原高度，主內容填滿剩餘空間。

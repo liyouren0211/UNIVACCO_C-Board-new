@@ -724,10 +724,16 @@ namespace StandardOPage
                 int width = next - reference.xoffsets[pt];
                 int height = group.Golden.GetLength(0);
                 var goldenFont = CharacterBandMatcher.Slice(group.Golden, left, 0, width, height);
-                var alignedFont = CharacterBandMatcher.Slice(group.Aligned, left, 0, width, height);
+                var grayFont = CharacterBandMatcher.Slice(group.AlignedGray, left, 0, width, height);
                 Mat template = CharacterBandMatcher.WriteGray(goldenFont);
-                Mat aligned = CharacterBandMatcher.WriteGray(alignedFont);
-                Mat raw = CharacterBandMatcher.WriteGray(alignedFont);
+                Mat raw = CharacterBandMatcher.WriteGray(grayFont);
+                // Alignment stays exactly as before. Engineering Threshold only
+                // controls the final image used for defect / block pixel comparison.
+                double engineeringThreshold = GetEngineeringThreshold(
+                    currentParams, fontIndex, isYin, saveOptions);
+                Mat aligned = FontBinaryWithThreshold(raw, isYin, engineeringThreshold);
+                Debug.WriteLine("[NativeFont][" + side + "][" + pt + "pt] engineeringThreshold="
+                    + engineeringThreshold.ToString("F2"));
                 Mat defect = null, block = null;
                 try
                 {
