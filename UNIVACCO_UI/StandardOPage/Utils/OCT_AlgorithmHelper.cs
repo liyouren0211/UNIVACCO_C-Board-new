@@ -2015,7 +2015,28 @@ namespace StandardOPage
             // 保留既有輸出檔名
             CvInvoke.Imwrite("processimg3.bmp", crop3);
             CvInvoke.Imwrite("processimg4.bmp", crop4);
-            CvInvoke.Imwrite("merged_image.bmp", mergedImage);
+            // 原有開發 Debug 原圖保留不變；給操作員額外複製一份到 Debug\陰陽版。
+            // 複製已寫好的 BMP，避免再次編碼大型拼接影像。
+            bool mergedImageSaved = CvInvoke.Imwrite("merged_image.bmp", mergedImage);
+            if (mergedImageSaved)
+            {
+                try
+                {
+                    string userImageFolder = Path.Combine(
+                        AppDomain.CurrentDomain.BaseDirectory, "Debug", "陰陽版");
+                    Directory.CreateDirectory(userImageFolder);
+                    string sourceMergedPath = Path.GetFullPath("merged_image.bmp");
+                    string targetMergedPath = Path.Combine(userImageFolder, "merged_image.bmp");
+                    if (!string.Equals(sourceMergedPath, targetMergedPath,
+                            StringComparison.OrdinalIgnoreCase))
+                        File.Copy(sourceMergedPath, targetMergedPath, true);
+                }
+                catch (Exception exportError)
+                {
+                    // 操作員圖片匯出失敗不影響原有 AOI 拼接與檢測。
+                    Debug.WriteLine("[Merge_FontArea][UserImageCopy] " + exportError);
+                }
+            }
 
             if (!BreakArea_02_crop.IsEmpty)
                 CvInvoke.Imwrite("BreakArea_02_crop.bmp", BreakArea_02_crop);
@@ -2146,6 +2167,20 @@ namespace StandardOPage
             sourceimg5 = new Mat(sourceimg5, new Rectangle(leftBoundary, top_y, rightBoundary - leftBoundary, 3000)).Clone();
 
             CvInvoke.Imwrite("fullnessarea.bmp", sourceimg5);
+            // 額外提供使用者查看；原本開發用原圖的位置與檔名不變。
+            try
+            {
+                string userFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Debug", "飽滿區");
+                Directory.CreateDirectory(userFolder);
+                string originalPath = Path.GetFullPath("fullnessarea.bmp");
+                string userPath = Path.Combine(userFolder, "fullnessarea.bmp");
+                File.Copy(originalPath, userPath, true);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[Fullness][UserImages] 原圖複製失敗：" + ex);
+            }
+
 
 
             #endregion
@@ -4481,10 +4516,36 @@ namespace StandardOPage
                 OCT_LogHelper.WriteLog(LogLevel.Error, Page.O, "網點區裁切錯誤", ex.ToString());
                 return null;
             }
+            // 額外提供現場使用者查看的網點原圖與二值圖，原本 Debug 檔案維持原樣。
+            string meshUserDebugFolder = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory, "Debug", "網點區");
+            bool meshUserFolderAvailable = false;
+            try
+            {
+                Directory.CreateDirectory(meshUserDebugFolder);
+                meshUserFolderAvailable = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[MeshP][UserImages] 無法建立網點區資料夾：" + ex);
+            }
+
             int index = 10;
             foreach (Mat area in meshp_areas)
             {
                 CvInvoke.Imwrite($"MeshP_{index}%.bmp", area);
+                if (meshUserFolderAvailable)
+                {
+                    try
+                    {
+                        CvInvoke.Imwrite(Path.Combine(meshUserDebugFolder,
+                            $"MeshP_{index}%.bmp"), area);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine("[MeshP][UserImages] 原圖存檔失敗：" + ex);
+                    }
+                }
                 if (index == 40)
                 {
                     index = 60; // 直接跳到 60%
@@ -4569,6 +4630,18 @@ namespace StandardOPage
             foreach (Mat threshold_meshp_area in meshp_areas_threshold)
             {
                 CvInvoke.Imwrite($"MeshP_Threshold_{meshp_index}%.bmp", threshold_meshp_area);
+                if (meshUserFolderAvailable)
+                {
+                    try
+                    {
+                        CvInvoke.Imwrite(Path.Combine(meshUserDebugFolder,
+                            $"MeshP_Threshold_{meshp_index}%.bmp"), threshold_meshp_area);
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine("[MeshP][UserImages] 二值圖存檔失敗：" + ex);
+                    }
+                }
                 int total_pixels = threshold_meshp_area.Width * threshold_meshp_area.Height;
                 int standard_pixels = Convert.ToInt32(total_pixels * meshp_index * 0.01);
                 meshp_standard_blackpxls.Add(standard_pixels);
@@ -4850,6 +4923,23 @@ namespace StandardOPage
         /// <summary>
         /// 飽滿度分析
         /// </summary>
+        // 使用者專用存圖：不受原本開發 Debug 選項影響。
+        // 失敗不阻斷飽滿區計算、單區重分析或 NG 判定。
+        private static void SaveUserFullnessThresholdImage(Mat binary)
+        {
+            if (binary == null || binary.IsEmpty) return;
+            try
+            {
+                string userFolder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Debug", "飽滿區");
+                Directory.CreateDirectory(userFolder);
+                CvInvoke.Imwrite(Path.Combine(userFolder, "Fullness_2_threshold.bmp"), binary);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[Fullness][UserImages] 二值圖儲存失敗：" + ex);
+            }
+        }
+
         public static Fullness_Results
             Fullness_analz(
                 Mat fullness_area,
@@ -4865,6 +4955,7 @@ namespace StandardOPage
             {
                 CvInvoke.Imwrite("Fullness_2_threshold.bmp", fullness_processimg);
             }
+            SaveUserFullnessThresholdImage(fullness_processimg);
             int whitepixels = 0;
             int totalPixels = fullness_processimg.Width * fullness_processimg.Height;
 
@@ -5450,6 +5541,8 @@ namespace StandardOPage
 
                 if (saveoptions.saveoption.Fullness_Threshold)
                     CvInvoke.Imwrite("Fullness_2_threshold.bmp", fullness_processimg);
+
+                SaveUserFullnessThresholdImage(fullness_processimg);
 
                 mask = new Mat(fullness_processimg.Size, DepthType.Cv8U, 1);
                 mask.SetTo(new MCvScalar(255));

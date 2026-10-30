@@ -1088,6 +1088,7 @@ namespace UNIVACCO_UI
             {
                 try
                 {
+                    FontV15Algorithm.ClearNativeEngineeringPreview();
                     StartInspectionStatus();
                     ClearPictureBox_SourceImg();
                     ClearUI();
@@ -1232,6 +1233,10 @@ namespace UNIVACCO_UI
                         RawImage5 = new Bitmap(pictureBox_SourceImage.Image).ToImage<Bgr, byte>().Mat;
                         SourceImage5 = RawImage5.ToImage<Bgr, byte>().Rotate(-rotationAngle, new Bgr(255, 255, 255)).Mat;
                         CvInvoke.Imwrite("SourceImage_O5.bmp", SourceImage5);
+
+                        // 額外保存本次 O 模式五張來源圖到工程介面圖片按鈕開啟的 Debug 根目錄。
+                        // 僅複製已輸出的 BMP，不重新編碼，也不影響原有存圖位置。
+                        CopyFiveSourceImagesToUserDebug();
 
                         var task_fullnessarea = SystemProceess_FullnessArea(SourceImage5);
 
@@ -1742,6 +1747,86 @@ namespace UNIVACCO_UI
             UpdateUI(() => label_MeshPBlockLevel.Text = meshp_results.Block_Level.ToString("F1"));
         }
 
+        // Mesh engineering live preview. Reuses the eight ROI images saved by the
+        // most recent inspection; never captures, crops, or overwrites production records.
+        public void RefreshMeshScoreFromEngineeringUI(double[] thresholdsPercent)
+        {
+            if (IsDisposed || Disposing || inspectionRunning ||
+                thresholdsPercent == null || thresholdsPercent.Length != 8) return;
+
+            int[] areas = { 10, 20, 30, 40, 60, 70, 80, 90 };
+            double[] scores = new double[8];
+            for (int i = 0; i < areas.Length; i++)
+            {
+                if (double.IsNaN(thresholdsPercent[i]) ||
+                    thresholdsPercent[i] < 0 || thresholdsPercent[i] > 100) return;
+                using (Mat source = GetMeshPreviewSource(areas[i]))
+                {
+                    if (source == null || source.IsEmpty) return;
+                    using (Mat gray = new Mat())
+                    using (Mat binary = new Mat())
+                    {
+                        if (source.NumberOfChannels == 1)
+                            source.CopyTo(gray);
+                        else
+                            CvInvoke.CvtColor(source, gray, ColorConversion.Bgr2Gray);
+                        double threshold = thresholdsPercent[i] * 255.0 / 100.0;
+                        CvInvoke.Threshold(gray, binary, threshold, 255, ThresholdType.Binary);
+                        double total = (double)binary.Width * binary.Height;
+                        if (total <= 0) return;
+                        double black = total - CvInvoke.CountNonZero(binary);
+                        double ratio = areas[i] / 100.0;
+                        double deviation = (black / total - ratio) * 100.0;
+                        scores[i] = deviation < 0 ? deviation / ratio : deviation / (1.0 - ratio);
+                    }
+                }
+            }
+
+            // Separate provisional results from saved inspection data.
+            MeshP_Results preview = new MeshP_Results()
+            {
+                Area10 = scores[0],
+                Area20 = scores[1],
+                Area30 = scores[2],
+                Area40 = scores[3],
+                Area60 = scores[4],
+                Area70 = scores[5],
+                Area80 = scores[6],
+                Area90 = scores[7]
+            };
+            OCT_AlgorithmHelper.Evaluate_MeshP(OCT_Rules, preview);
+            label_MeshP_Result10.Text = preview.Area10.ToString("F2");
+            label_MeshP_Result20.Text = preview.Area20.ToString("F2");
+            label_MeshP_Result30.Text = preview.Area30.ToString("F2");
+            label_MeshP_Result40.Text = preview.Area40.ToString("F2");
+            label_MeshP_Result60.Text = preview.Area60.ToString("F2");
+            label_MeshP_Result70.Text = preview.Area70.ToString("F2");
+            label_MeshP_Result80.Text = preview.Area80.ToString("F2");
+            label_MeshP_Result90.Text = preview.Area90.ToString("F2");
+            label_MeshPDefectLevel.Text = preview.Defect_Level.ToString("F1");
+            label_MeshPBlockLevel.Text = preview.Block_Level.ToString("F1");
+        }
+
+        // Engineering UI live scoring of the last completed inspection (numbers only).
+        // Leaves recorded images and production result untouched until a full inspection.
+        public void RefreshFontScoreFromEngineeringUI(bool isYin, double[] thresholdsPercent)
+        {
+            if (IsDisposed || Disposing || inspectionRunning) return;
+            Font_Results defects, blocks;
+            if (!FontV15Algorithm.TryRecalculateCachedFontScores(
+                isYin, thresholdsPercent, out defects, out blocks)) return;
+            if (isYin)
+            {
+                OCT_AlgorithmHelper.Evaluate_Yin(OCT_Rules, defects, blocks);
+                Update_Yin(defects, blocks);
+            }
+            else
+            {
+                OCT_AlgorithmHelper.Evaluate_Yang(OCT_Rules, defects, blocks);
+                Update_Yang(defects, blocks);
+            }
+        }
+
         private void Update_Yin(Font_Results yin_defect_results, Font_Results yin_block_results)
         {
             UpdateUI(() => label_YinDefect_3pt.Text = yin_defect_results._3pt.ToString("F1"));
@@ -1936,6 +2021,35 @@ namespace UNIVACCO_UI
 
             BreakAreaForm breakAreaForm = new BreakAreaForm(BreakArea_01_crop, BreakArea_02_crop, BreakArea_03_crop);
             breakAreaForm.Show();
+        }
+        /// <summary>
+        /// 額外輸出 O 模式五站原始來源圖；Debug 儲存失敗不影響 AOI 分析.
+        /// </summary>
+        private static void CopyFiveSourceImagesToUserDebug()
+        {
+            try
+            {
+                string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Debug");
+                Directory.CreateDirectory(folder);
+                for (int station = 1; station <= 5; station++)
+                {
+                    string filename = "SourceImage_O" + station + ".bmp";
+                    // CvInvoke.Imwrite 使用相對路徑，從相同的工作目錄尋找輸出檔。
+                    string sourcePath = Path.GetFullPath(filename);
+                    string targetPath = Path.Combine(folder, filename);
+                    if (!File.Exists(sourcePath))
+                    {
+                        Debug.WriteLine("[O][SourceImageCopy] 檔案不存在：" + sourcePath);
+                        continue;
+                    }
+                    if (!string.Equals(sourcePath, targetPath, StringComparison.OrdinalIgnoreCase))
+                        File.Copy(sourcePath, targetPath, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[O][SourceImageCopy] " + ex);
+            }
         }
     }
 }

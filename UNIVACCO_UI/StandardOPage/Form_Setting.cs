@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Data;
 using System.Drawing;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -19,11 +21,13 @@ namespace UNIVACCO_UI
         UserControl_TempStandard TempStandardChangeOPage;
         UserControl_Main StandardOPage;
         UserControl_SaveOptions StandardOSettingPage;
+        private Button button_OpenDebugImages;
 
         public Setting_O_Window(UNIVACCO _MainPage, UserControl_Main _StandardOPage)
         {
             InitializeComponent();
             ConfigureResponsiveLayout();
+            InitializeDebugImageButton();
             MainPage = _MainPage;
             StandardOPage = _StandardOPage;
             ParameterChangeOPage = new UserControl_ParameterChange(MainPage, StandardOPage);    //參數頁面
@@ -76,8 +80,86 @@ namespace UNIVACCO_UI
             {
                 pictureBox3.Width = ClientSize.Width;
                 button_Save.Left = ClientSize.Width - button_Save.Width - 13;
+                PositionDebugImageButton();
                 panel_MainPage.Size = new Size(ClientSize.Width, Math.Max(100, ClientSize.Height - 105));
             };
+        }
+
+        // 開啟現有的 Debug 圖片總資料夾；不變更任何圖片輸出路徑。
+        private void InitializeDebugImageButton()
+        {
+            button_OpenDebugImages = new Button();
+            button_OpenDebugImages.Name = "button_OpenDebugImages";
+            button_OpenDebugImages.Size = new Size(84, 84);
+            button_OpenDebugImages.BackColor = Color.AntiqueWhite;
+            button_OpenDebugImages.FlatStyle = FlatStyle.Flat;
+            button_OpenDebugImages.FlatAppearance.BorderSize = 0;
+            button_OpenDebugImages.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            button_OpenDebugImages.Cursor = Cursors.Hand;
+            button_OpenDebugImages.Text = string.Empty;
+            button_OpenDebugImages.Font = new Font("Microsoft JhengHei UI", 12F, FontStyle.Bold);
+            button_OpenDebugImages.ImageAlign = ContentAlignment.MiddleCenter;
+            button_OpenDebugImages.Image = CreateFolderIcon();
+            button_OpenDebugImages.Click += button_OpenDebugImages_Click;
+            ToolTip tip = new ToolTip();
+            tip.SetToolTip(button_OpenDebugImages, "開啟檢測 Debug 圖片總資料夾");
+            Controls.Add(button_OpenDebugImages);
+            button_OpenDebugImages.BringToFront();
+            PositionDebugImageButton();
+        }
+
+        private void PositionDebugImageButton()
+        {
+            if (button_OpenDebugImages == null) return;
+            // 與儲存按鈕邊緣保留 40 像素，避免誤觸。
+            button_OpenDebugImages.Left = button_Save.Left - 40 - button_OpenDebugImages.Width;
+            button_OpenDebugImages.Top = button_Save.Top;
+        }
+
+        private static Bitmap CreateFolderIcon()
+        {
+            Bitmap icon = new Bitmap(58, 47);
+            using (Graphics g = Graphics.FromImage(icon))
+            using (Pen outline = new Pen(Color.Black, 3.0f))
+            using (SolidBrush fill = new SolidBrush(Color.FromArgb(250, 212, 100)))
+            {
+                g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+                Point[] folder = { new Point(5, 12), new Point(21, 12), new Point(26, 17),
+                    new Point(52, 17), new Point(52, 41), new Point(5, 41) };
+                g.FillPolygon(fill, folder);
+                g.DrawPolygon(outline, folder);
+                g.DrawLine(outline, 5, 12, 5, 8);
+                g.DrawLine(outline, 5, 8, 21, 8);
+                g.DrawLine(outline, 21, 8, 26, 13);
+            }
+            return icon;
+        }
+
+        private void button_OpenDebugImages_Click(object sender, EventArgs e)
+        {
+            string folder = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                "Debug");
+            if (!Directory.Exists(folder))
+            {
+                MessageBox.Show(this,
+                    "尚未找到 Debug 圖片資料夾。\n請先完成一次有啟用 Debug 圖片輸出的檢測。\n\n" + folder,
+                    "尚無圖片", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "explorer.exe",
+                    Arguments = "\"" + folder + "\"",
+                    UseShellExecute = true
+                });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "開啟圖片資料夾失敗：" + ex.Message,
+                    "開啟失敗", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
         }
 
         private void button_ThresholdChangePage_Click(object sender, EventArgs e)

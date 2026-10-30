@@ -75,11 +75,14 @@ namespace UNIVACCO_UI
             WireFontPreviewEvents();
 
             previewDebounceTimer = new Timer();
-            previewDebounceTimer.Interval = 350;
+            // Wait until typing stops, so entering 12 does not calculate 1 first.
+            previewDebounceTimer.Interval = 800;
             previewDebounceTimer.Tick += delegate
             {
                 previewDebounceTimer.Stop();
                 RefreshLivePreview();
+                RefreshMainFontScore();
+                RefreshMainMeshScore();
             };
 
             ReloadUI();
@@ -123,6 +126,20 @@ namespace UNIVACCO_UI
             );
             dcMeshGroup.Location = new Point(461, 385);
             tabPage2.Controls.Add(dcMeshGroup);
+
+            // Dynamically-created inputs need stable names for active-card live scoring.
+            int[] areas = { 10, 20, 30, 40, 60, 70, 80, 90 };
+            TextBox[] wc = { textBox_WC_MeshP_10, textBox_WC_MeshP_20,
+                textBox_WC_MeshP_30, textBox_WC_MeshP_40, textBox_WC_MeshP_60,
+                textBox_WC_MeshP_70, textBox_WC_MeshP_80, textBox_WC_MeshP_90 };
+            TextBox[] dc = { textBox_DC_MeshP_10, textBox_DC_MeshP_20,
+                textBox_DC_MeshP_30, textBox_DC_MeshP_40, textBox_DC_MeshP_60,
+                textBox_DC_MeshP_70, textBox_DC_MeshP_80, textBox_DC_MeshP_90 };
+            for (int i = 0; i < areas.Length; i++)
+            {
+                wc[i].Name = "textBox_WC_MeshP_" + areas[i];
+                dc[i].Name = "textBox_DC_MeshP_" + areas[i];
+            }
         }
 
         private GroupBox CreateMeshParameterGroup(
@@ -243,8 +260,8 @@ namespace UNIVACCO_UI
         private void MeshParameter_TextChanged(object sender, EventArgs e)
         {
             TextBox tb = sender as TextBox;
-            if (tb == null || tb != selectedPreviewControl || selectedPreviewTarget != PreviewTarget.Mesh)
-                return;
+            if (tb == null || selectedPreviewTarget != PreviewTarget.Mesh ||
+                !meshAreaMap.ContainsKey(tb)) return;
 
             QueuePreviewRefresh();
         }
@@ -347,6 +364,63 @@ namespace UNIVACCO_UI
                 livePreviewForm.ShowMesh(selectedMeshArea, percent);
             else
                 livePreviewForm.ShowFont(selectedFontIsYin, selectedFontPt, percent);
+        }
+
+        // 800ms debounced main-screen update. Read ALL ten values of the same side,
+        // not only the selected pt, so total percentages always use a consistent set.
+        private void RefreshMainFontScore()
+        {
+            TextBox tb = selectedPreviewControl as TextBox;
+            if (tb == null || selectedPreviewTarget != PreviewTarget.Font) return;
+            string name = tb.Name ?? "";
+            bool whiteCard = name.IndexOf("_WC_", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool doubleCard = name.IndexOf("_DC_", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!whiteCard && !doubleCard) return;
+            // Never update the displayed active card from an inactive card tab.
+            bool activeWhiteCard = object.ReferenceEquals(StandardOPage.CurrentCardType_Params, StandardOPage.WC_Params);
+            bool activeDoubleCard = object.ReferenceEquals(StandardOPage.CurrentCardType_Params, StandardOPage.DC_Params);
+            if ((whiteCard && !activeWhiteCard) || (doubleCard && !activeDoubleCard)) return;
+            var values = new double[10];
+            string card = whiteCard ? "WC" : "DC";
+            string side = selectedFontIsYin ? "Yin" : "Yang";
+            for (int pt = 3; pt <= 12; pt++)
+            {
+                Control[] matches = Controls.Find("textBox_" + card + "_" + side + "_" + pt + "pt", true);
+                if (matches.Length != 1) return;
+                TextBox valueBox = matches[0] as TextBox;
+                double percent;
+                if (valueBox == null || !double.TryParse(valueBox.Text, out percent)
+                    || percent < 0 || percent > 100) return;
+                values[pt - 3] = percent;
+            }
+            StandardOPage.RefreshFontScoreFromEngineeringUI(selectedFontIsYin, values);
+        }
+
+        // All eight thresholds are read from the active card tab in one pass,
+        // matching the per-font live-score update strategy.
+        private void RefreshMainMeshScore()
+        {
+            TextBox selected = selectedPreviewControl as TextBox;
+            if (selected == null || selectedPreviewTarget != PreviewTarget.Mesh) return;
+            bool whiteCard = selected.Name.IndexOf("_WC_", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool doubleCard = selected.Name.IndexOf("_DC_", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool activeWhiteCard = object.ReferenceEquals(StandardOPage.CurrentCardType_Params, StandardOPage.WC_Params);
+            bool activeDoubleCard = object.ReferenceEquals(StandardOPage.CurrentCardType_Params, StandardOPage.DC_Params);
+            if ((!whiteCard && !doubleCard) || (whiteCard && !activeWhiteCard) ||
+                (doubleCard && !activeDoubleCard)) return;
+            string prefix = whiteCard ? "WC" : "DC";
+            int[] areas = { 10, 20, 30, 40, 60, 70, 80, 90 };
+            double[] percentages = new double[areas.Length];
+            for (int i = 0; i < areas.Length; i++)
+            {
+                Control[] controls = Controls.Find("textBox_" + prefix + "_MeshP_" + areas[i], true);
+                TextBox box = controls.Length == 1 ? controls[0] as TextBox : null;
+                double number;
+                if (box == null || !double.TryParse(box.Text, out number) ||
+                    double.IsNaN(number) || number < 0 || number > 100) return;
+                percentages[i] = number;
+            }
+            StandardOPage.RefreshMeshScoreFromEngineeringUI(percentages);
         }
 
         private void ReloadUI()

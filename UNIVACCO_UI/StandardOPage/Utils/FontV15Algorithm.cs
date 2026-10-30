@@ -1,6 +1,7 @@
 ﻿using Emgu.CV;
 using Emgu.CV.CvEnum;
 using Emgu.CV.Structure;
+using System.Drawing.Imaging;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -30,6 +31,231 @@ namespace StandardOPage
     /// </summary>
     public static class FontV15Algorithm
     {
+        // Snapshot of the exact per-font inputs used by Native AOI scoring.
+        // The engineering UI uses clones and never mutates these snapshots.
+        private static readonly object PreviewLock = new object();
+        private static readonly Dictionary<string, Tuple<Mat, Mat>> NativePreviewInputs =
+            new Dictionary<string, Tuple<Mat, Mat>>();
+
+        // Native alignment overlay cache, matching the 03_FINAL_OVERLAY debug output.
+        private static readonly Dictionary<string, Mat> NativeGroupOverlays =
+            new Dictionary<string, Mat>();
+
+        private static void RememberNativeGroupOverlays(
+            List<NativeCharacterAlignmentPipeline.GroupResult> groups, string side)
+        {
+            lock (PreviewLock)
+            {
+                foreach (var group in groups)
+                {
+                    string key = side + "_" + group.Group;
+                    Mat old;
+                    if (NativeGroupOverlays.TryGetValue(key, out old)) old.Dispose();
+                    NativeGroupOverlays[key] = CharacterBandMatcher.BuildFinalOverlay(group.Golden, group.Aligned);
+                }
+            }
+        }
+
+        // Re-score the last native aligned GRAY snapshots with engineering UI thresholds.
+        // No camera, registration or native alignment work is repeated.
+        public static bool TryRecalculateCachedFontScores(bool isYin, double[] thresholdPercents,
+            out Font_Results defectResults, out Font_Results blockResults)
+        {
+            defectResults = null;
+            blockResults = null;
+            if (thresholdPercents == null || thresholdPercents.Length != 10) return false;
+            var snapshots = new List<Tuple<Mat, Mat>>();
+            lock (PreviewLock)
+            {
+                for (int pt = 3; pt <= 12; pt++)
+                {
+                    Tuple<Mat, Mat> item;
+                    if (!NativePreviewInputs.TryGetValue(PreviewKey(isYin, pt), out item))
+                    {
+                        foreach (var saved in snapshots) { saved.Item1.Dispose(); saved.Item2.Dispose(); }
+                        return false;
+                    }
+                    snapshots.Add(Tuple.Create(item.Item1.Clone(), item.Item2.Clone()));
+                }
+            }
+            try
+            {
+                var d = new Font_Results();
+                var b = new Font_Results();
+                long totalMissing = 0, totalBlock = 0, totalMissingBase = 0, totalBlockBase = 0;
+                for (int i = 0; i < snapshots.Count; i++)
+                {
+                    using (Mat measured = FontBinaryWithThreshold(snapshots[i].Item2, isYin, thresholdPercents[i] * 2.55))
+                    using (Mat red = BuildDefectImage(measured, snapshots[i].Item1))
+                    using (Mat green = BuildBlockImage(measured, snapshots[i].Item1))
+                    {
+                        int fg = CountWhitePixels(snapshots[i].Item1);
+                        int bg = snapshots[i].Item1.Width * snapshots[i].Item1.Height - fg;
+                        int redPixels = CountWhitePixels(red);
+                        int greenPixels = CountWhitePixels(green);
+                        int missing = isYin ? greenPixels : redPixels;
+                        int blocking = isYin ? redPixels : greenPixels;
+                        int missingBase = fg; // Yin: green pixels / Golden WHITE; Yang unchanged
+                        int blockingBase = isYin ? fg : bg;
+                        SetFontResult(d, i, missingBase > 0 ? missing * 100.0 / missingBase : 0);
+                        SetFontResult(b, i, blockingBase > 0 ? blocking * 100.0 / blockingBase : 0);
+                        totalMissing += missing;
+                        totalBlock += blocking;
+                        totalMissingBase += missingBase;
+                        totalBlockBase += blockingBase;
+                    }
+                }
+                d.Defect_Total_Percentage = totalMissingBase > 0 ? totalMissing * 100.0 / totalMissingBase : 0;
+                b.Block_Total_Percentage = totalBlockBase > 0 ? totalBlock * 100.0 / totalBlockBase : 0;
+                defectResults = d;
+                blockResults = b;
+                return true;
+            }
+            finally
+            {
+                // Release the cloned scoring snapshots.
+                foreach (var pair in snapshots)
+                {
+                    pair.Item1.Dispose();
+                    pair.Item2.Dispose();
+                }
+            }
+        }
+
+        public static void ClearNativeEngineeringPreview()
+        {
+            lock (PreviewLock)
+            {
+                foreach (Tuple<Mat, Mat> pair in NativePreviewInputs.Values)
+                {
+                    pair.Item1.Dispose();
+                    pair.Item2.Dispose();
+                }
+                NativePreviewInputs.Clear();
+                foreach (Mat overlay in NativeGroupOverlays.Values) overlay.Dispose();
+                NativeGroupOverlays.Clear();
+            }
+        }
+
+        private static string PreviewKey(bool isYin, int pt)
+        {
+            return (isYin ? "Yin" : "Yang") + "_" + pt;
+        }
+
+        private static void RememberNativePreview(bool isYin, int pt, Mat golden, Mat alignedGray)
+        {
+            string key = PreviewKey(isYin, pt);
+            lock (PreviewLock)
+            {
+                Tuple<Mat, Mat> old;
+                if (NativePreviewInputs.TryGetValue(key, out old))
+                {
+                    old.Item1.Dispose();
+                    old.Item2.Dispose();
+                }
+                NativePreviewInputs[key] = Tuple.Create(golden.Clone(), alignedGray.Clone());
+            }
+        }
+
+        /// <summary>
+        /// Rebuild the preview using the exact native scoring inputs, polarity,
+        /// and difference operations. Threshold is supplied by engineering UI.
+        /// Returns false until a native inspection for that font has completed.
+        /// Caller owns the returned Bitmap.
+        /// </summary>
+        public static bool TryBuildNativeEngineeringPreview(bool isYin, int pt,
+            double threshold, out Bitmap preview, out double defectPercent,
+            out double blockPercent)
+        {
+            preview = null;
+            defectPercent = 0;
+            blockPercent = 0;
+            Mat golden = null, gray = null;
+            lock (PreviewLock)
+            {
+                Tuple<Mat, Mat> item;
+                if (!NativePreviewInputs.TryGetValue(PreviewKey(isYin, pt), out item))
+                    return false;
+                golden = item.Item1.Clone();
+                gray = item.Item2.Clone();
+            }
+            try
+            {
+                using (golden)
+                using (gray)
+                using (Mat measured = FontBinaryWithThreshold(gray, isYin, threshold))
+                using (Mat defect = BuildDefectImage(measured, golden))
+                using (Mat block = BuildBlockImage(measured, golden))
+                using (Bitmap binaryBitmap = measured.ToBitmap())
+                using (Bitmap overlayBitmap = MakeEngineeringFontOverlay(golden, measured))
+                {
+                    int fg = CountWhitePixels(golden);
+                    int bg = golden.Width * golden.Height - fg;
+                    // Yin: green (Measured minus Golden) = missing print;
+                    //      red (Golden minus Measured) = blockage.
+                    // Yang: original mapping is retained.
+                    defectPercent = isYin
+                        ? (fg > 0 ? 100.0 * CountWhitePixels(block) / fg : 0)
+                        : (fg > 0 ? 100.0 * CountWhitePixels(defect) / fg : 0);
+                    blockPercent = isYin
+                        ? (fg > 0 ? 100.0 * CountWhitePixels(defect) / fg : 0)
+                        : (bg > 0 ? 100.0 * CountWhitePixels(block) / bg : 0);
+                    // Both images are the SAME font band and use the SAME engineering threshold.
+                    const int labelHeight = 34;
+                    const int gap = 12;
+                    int h = Math.Max(binaryBitmap.Height, overlayBitmap.Height);
+                    Bitmap combined = new Bitmap(binaryBitmap.Width + overlayBitmap.Width + gap,
+                        h + labelHeight);
+                    using (Graphics g = Graphics.FromImage(combined))
+                    using (Font titleFont = new Font("Microsoft JhengHei", 12F, FontStyle.Bold))
+                    {
+                        g.Clear(Color.Black);
+                        g.DrawString("待測物二值圖（" + pt + "pt）", titleFont,
+                            Brushes.White, 3, 3);
+                        g.DrawString("即時金樣本疊圖（" + pt + "pt）", titleFont,
+                            Brushes.White, binaryBitmap.Width + gap + 3, 3);
+                        g.DrawImageUnscaled(binaryBitmap, 0, labelHeight);
+                        g.DrawImageUnscaled(overlayBitmap, binaryBitmap.Width + gap, labelHeight);
+                    }
+                    preview = combined;
+                }
+                return true;
+            }
+            catch
+            {
+                if (preview != null) preview.Dispose();
+                preview = null;
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Live overlay for ONE font-size band. Golden=red, Measured=green,
+        /// overlap=yellow. Shares the same binary data used for scoring.
+        /// This is not the saved original group 03_FINAL_OVERLAY.
+        /// </summary>
+        private static Bitmap MakeEngineeringFontOverlay(Mat golden, Mat measured)
+        {
+            using (Image<Gray, byte> g = golden.ToImage<Gray, byte>())
+            using (Image<Gray, byte> m = measured.ToImage<Gray, byte>())
+            using (Image<Bgr, byte> output = new Image<Bgr, byte>(golden.Width, golden.Height))
+            {
+                output.SetZero();
+                for (int y = 0; y < golden.Height; y++)
+                {
+                    for (int x = 0; x < golden.Width; x++)
+                    {
+                        // Red channel = golden, green channel = measured.
+                        // Both foreground -> yellow, golden only -> red,
+                        // measured only -> green.
+                        if (g.Data[y, x, 0] > 0) output.Data[y, x, 2] = 255;
+                        if (m.Data[y, x, 0] > 0) output.Data[y, x, 1] = 255;
+                    }
+                }
+                return output.ToBitmap();
+            }
+        }
+
         private static readonly string[] FontNames =
         {
             "3pt", "4pt", "5pt", "6pt", "7pt",
@@ -522,13 +748,23 @@ namespace StandardOPage
                     alignedValidMask,
                     templateForegroundValid);
 
+                // Keep the raw difference operations unchanged; only Yin's
+                // physical defect labels are reversed, including image outputs.
+                if (isYin)
+                {
+                    Mat temp = defect;
+                    defect = block;
+                    block = temp;
+                }
                 int defectPixels = CountWhitePixels(defect);
                 int blockPixels = CountWhitePixels(block);
-                int foregroundPixels = CountWhitePixels(templateForegroundValid);
+                int goldenForeground = CountWhitePixels(templateForegroundValid);
                 int validPixels = CountWhitePixels(alignedValidMask);
-                int backgroundPixels = Math.Max(
-                    0,
-                    validPixels - foregroundPixels);
+                int goldenBackground = Math.Max(0, validPixels - goldenForeground);
+                // FontInfo holds the denominator of each physical defect score.
+                // Yin missing green area is normalized by Golden WHITE font area.
+                int foregroundPixels = goldenForeground; // Yin missing denominator = Golden WHITE
+                int backgroundPixels = isYin ? goldenForeground : goldenBackground;
 
                 double defectPercentage =
                     foregroundPixels <= 0
@@ -697,6 +933,7 @@ namespace StandardOPage
             string goldenPath = ResolveCharacterGoldenPath();
             var reference = GoldenCharacters.Load(goldenPath, side);
             var groups = NativeCharacterAlignmentPipeline.Analyze(area, goldenPath, side);
+            RememberNativeGroupOverlays(groups, side);
             if (ShouldSaveDebug(saveOptions))
             {
                 try
@@ -715,6 +952,15 @@ namespace StandardOPage
             var defectStats = new Font_Results();
             var infos = new List<FontInfo>();
             double allMiss = 0, allExtra = 0, allForeground = 0, allBackground = 0;
+            // Debug 直接收集「正式計分」已產生的 binary，避免與工程介面走不同 Threshold。
+            bool saveScoreOverlay = ShouldSaveDebug(saveOptions);
+            var scoreBinaryByGroup = new Dictionary<string, byte[,]>();
+            var scoreThresholds = new Dictionary<int, double>();
+            if (saveScoreOverlay)
+            {
+                foreach (var g in groups)
+                    scoreBinaryByGroup[g.Group] = new byte[g.Golden.GetLength(0), g.Golden.GetLength(1)];
+            }
             for (int pt = 3; pt <= 12; pt++)
             {
                 int fontIndex = pt - 3;
@@ -727,11 +973,22 @@ namespace StandardOPage
                 var grayFont = CharacterBandMatcher.Slice(group.AlignedGray, left, 0, width, height);
                 Mat template = CharacterBandMatcher.WriteGray(goldenFont);
                 Mat raw = CharacterBandMatcher.WriteGray(grayFont);
+                RememberNativePreview(isYin, pt, template, raw);
                 // Alignment stays exactly as before. Engineering Threshold only
                 // controls the final image used for defect / block pixel comparison.
                 double engineeringThreshold = GetEngineeringThreshold(
                     currentParams, fontIndex, isYin, saveOptions);
                 Mat aligned = FontBinaryWithThreshold(raw, isYin, engineeringThreshold);
+                if (saveScoreOverlay)
+                {
+                    // 精確重用當次正式缺燙/塞版計分的 aligned，不重新二值化。
+                    byte[,] scored = CharacterBandMatcher.ReadGray(aligned);
+                    byte[,] canvas = scoreBinaryByGroup[group.Group];
+                    for (int yy = 0; yy < scored.GetLength(0); yy++)
+                        for (int xx = 0; xx < scored.GetLength(1); xx++)
+                            canvas[yy, left + xx] = scored[yy, xx];
+                    scoreThresholds[pt] = engineeringThreshold;
+                }
                 Debug.WriteLine("[NativeFont][" + side + "][" + pt + "pt] engineeringThreshold="
                     + engineeringThreshold.ToString("F2"));
                 Mat defect = null, block = null;
@@ -743,11 +1000,38 @@ namespace StandardOPage
                     int extra = CountWhitePixels(block);
                     int fg = CountWhitePixels(template);
                     int bg = width * height - fg;
-                    // Original station display and result consumers retain same per-font Mat objects.
+                    // Yin 3pt only: diagnostic comparison, NEVER changes scoring or NG.
+                    if (isYin && pt == 3 && ShouldSaveDebug(saveOptions))
+                    {
+                        try
+                        {
+                            SaveYinThreePtDirectionalDiagnostic(
+                                template, raw, aligned, defect, block,
+                                engineeringThreshold, miss, extra, fg, bg);
+                        }
+                        catch (Exception diagError)
+                        {
+                            Debug.WriteLine("[Yin3ptDirectionDebug] " + diagError);
+                        }
+                    }
+                    // Physical defect classification:
+                    // Yin green = missing print; Yin red = blockage.
+                    // Yang red = missing print; Yang green = blockage.
+                    if (isYin)
+                    {
+                        Mat temp = defect;
+                        defect = block;
+                        block = temp;
+                        int pixels = miss;
+                        miss = extra;
+                        extra = pixels;
+                        // Keep fg and bg as the original Golden WHITE/BLACK counts.
+                    }
+                    // Main-screen defect/block masks now follow the same physical labels.
                     SetFontImg(original, fontIndex, EnsureBgr(raw));
                     SetFontImg(blocks, fontIndex, block);
                     SetFontImg(defects, fontIndex, defect);
-                    SetFontResult(blockStats, fontIndex, bg > 0 ? extra * 100.0 / bg : 0);
+                    SetFontResult(blockStats, fontIndex, (isYin ? fg : bg) > 0 ? extra * 100.0 / (isYin ? fg : bg) : 0);
                     SetFontResult(defectStats, fontIndex, fg > 0 ? miss * 100.0 / fg : 0);
                     infos.Add(new FontInfo
                     {
@@ -757,9 +1041,9 @@ namespace StandardOPage
                         Block_Pixels = extra,
                         Defect_Pixels = miss,
                         TemplateForegroundPixels = fg,
-                        TemplateBackgroundPixels = bg
+                        TemplateBackgroundPixels = isYin ? fg : bg
                     });
-                    allMiss += miss; allExtra += extra; allForeground += fg; allBackground += bg;
+                    allMiss += miss; allExtra += extra; allForeground += fg; allBackground += isYin ? fg : bg;
                     // Transfer ownership to result objects.
                     block = null; defect = null;
                     Debug.WriteLine($"[NativeFont][{side}][{pt}pt] aligned characters={group.Characters.Count(c => c.FontPt == pt)}");
@@ -768,6 +1052,18 @@ namespace StandardOPage
                 {
                     template.Dispose(); aligned.Dispose(); raw.Dispose();
                     block?.Dispose(); defect?.Dispose();
+                }
+            }
+            // 分數已確定後才更新 Debug 圖；除錯儲存失敗不能改變 AOI 判定。
+            if (saveScoreOverlay)
+            {
+                try
+                {
+                    SaveNativeScoringOverlayDebug(groups, side, scoreBinaryByGroup, scoreThresholds);
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[NativeFont][ScoringOverlaySave] " + ex);
                 }
             }
             defectStats.Defect_Total_Percentage = allForeground > 0 ? allMiss * 100 / allForeground : 0;
@@ -3039,7 +3335,7 @@ namespace StandardOPage
                 using (Mat finalOverlay = CharacterBandMatcher.BuildFinalOverlay(group.Golden, group.Aligned))
                 using (Mat skeletonOverlay = CharacterBandMatcher.BuildSkeletonOverlay(group.Golden, group.Aligned))
                 {
-                    CvInvoke.Imwrite(Path.Combine(dir, "03_FINAL_OVERLAY.png"), finalOverlay);
+                    CvInvoke.Imwrite(Path.Combine(dir, "03_ALIGNMENT_OVERLAY.png"), finalOverlay);
                     CvInvoke.Imwrite(Path.Combine(dir, "04_SK_OVERLAY_AFTER.png"), skeletonOverlay);
                 }
 
@@ -3054,6 +3350,248 @@ namespace StandardOPage
                         "matched_characters=" + group.Characters.Count
                     });
             }
+        }
+
+        // FINAL_OVERLAY 僅顯示正式計分用的像素；原始對位診斷圖另存 ALIGNMENT_OVERLAY。
+        private static void SaveNativeScoringOverlayDebug(
+            List<NativeCharacterAlignmentPipeline.GroupResult> groups,
+            string sideName,
+            Dictionary<string, byte[,]> scoredBinaryByGroup,
+            Dictionary<int, double> thresholds)
+        {
+            string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                "FontAlignment_Debug", sideName);
+            Dictionary<string, string> savedOverlayPaths = new Dictionary<string, string>();
+            foreach (var group in groups)
+            {
+                byte[,] binary;
+                if (!scoredBinaryByGroup.TryGetValue(group.Group, out binary)) continue;
+                string dir = Path.Combine(root, group.Group);
+                Directory.CreateDirectory(dir);
+                string overlayPath = Path.Combine(dir, "03_FINAL_OVERLAY.png");
+                using (Mat overlay = CharacterBandMatcher.BuildFinalOverlay(group.Golden, binary))
+                    CvInvoke.Imwrite(overlayPath, overlay);
+                savedOverlayPaths[group.Group] = overlayPath;
+                var pts = group.Group == "A" ? Enumerable.Range(3, 6) : Enumerable.Range(9, 4);
+                File.WriteAllLines(Path.Combine(dir, "03_FINAL_OVERLAY_thresholds.txt"),
+                    pts.Select(pt => pt + "pt threshold_0_255=" +
+                        thresholds[pt].ToString("F2", System.Globalization.CultureInfo.InvariantCulture)));
+            }
+
+            // Assemble each side in memory. Only the combined Yin+Yang image is saved.
+            // The original per-group developer Debug outputs are unchanged.
+            Bitmap sideImage = BuildUserCombinedFinalOverlay(savedOverlayPaths);
+            TrySaveUserYinYangSideBySide(sideName, sideImage);
+        }
+
+        private static readonly object UserYinYangExportLock = new object();
+        private static readonly Dictionary<string, Bitmap> UserYinYangPending =
+            new Dictionary<string, Bitmap>(StringComparer.OrdinalIgnoreCase);
+
+        private static void TrySaveUserYinYangSideBySide(string sideName, Bitmap sideImage)
+        {
+            lock (UserYinYangExportLock)
+            {
+                Bitmap old;
+                if (UserYinYangPending.TryGetValue(sideName, out old))
+                {
+                    old.Dispose();
+                    UserYinYangPending.Remove(sideName);
+                }
+                if (sideImage == null)
+                    return;
+
+                UserYinYangPending[sideName] = sideImage;
+                Bitmap yin, yang;
+                if (!UserYinYangPending.TryGetValue("Yin", out yin) ||
+                    !UserYinYangPending.TryGetValue("Yang", out yang))
+                    return;
+
+                try
+                {
+                    string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                        "Debug", "陰陽版");
+                    Directory.CreateDirectory(dir);
+                    // Match the physical reference merged_image.bmp layout.  The original
+                    // Merge_FontArea routine joins the two station crops into one common
+                    // canvas; do NOT simply join two arbitrary-sized debug bitmaps.
+                    Size target = GetUserMergedReferenceSize(yin, yang);
+                    int midX = target.Width / 2;
+                    using (Bitmap combined = new Bitmap(target.Width, target.Height))
+                    using (Graphics g = Graphics.FromImage(combined))
+                    {
+                        g.Clear(Color.Black);
+                        g.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                        g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
+                        g.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
+                        // Fit each side independently, preserving its aspect ratio.
+                        // The common top and bottom align to the physical font strip.
+                        // Correct physical order: Yang (left), Yin (right).
+                        DrawUserOverlayFitted(g, yang, new Rectangle(0, 0, midX, target.Height), true);
+                        DrawUserOverlayFitted(g, yin,
+                            new Rectangle(midX, 0, target.Width - midX, target.Height), false);
+                        combined.Save(Path.Combine(dir,
+                            "陰陽版_FINAL_OVERLAY_COMBINED.png"), ImageFormat.Png);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[FontV15][YinYangSideBySide] " + ex);
+                }
+                finally
+                {
+                    yin.Dispose();
+                    yang.Dispose();
+                    UserYinYangPending.Clear();
+                }
+            }
+        }
+
+        // Prefer the real merged_image.bmp dimensions for user-visible side-by-side output.
+        // Read dimensions only; never overwrite or reinterpret the original source image.
+        private static Size GetUserMergedReferenceSize(Bitmap yin, Bitmap yang)
+        {
+            string[] candidates =
+            {
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    "Debug", "陰陽版", "merged_image.bmp"),
+                Path.Combine(Environment.CurrentDirectory, "merged_image.bmp")
+            };
+            foreach (string candidate in candidates)
+            {
+                if (!File.Exists(candidate)) continue;
+                try
+                {
+                    using (Image img = Image.FromFile(candidate))
+                    {
+                        if (img.Width > 100 && img.Height > 100)
+                            return img.Size;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine("[FontV15][ReferenceDimensions] " + ex.Message);
+                }
+            }
+            // No reference available: retain native debug resolution.
+            return new Size(yin.Width + yang.Width, Math.Max(yin.Height, yang.Height));
+        }
+
+        private static void DrawUserOverlayFitted(Graphics g, Bitmap image,
+            Rectangle region, bool alignRight)
+        {
+            if (image == null || region.Width <= 0 || region.Height <= 0) return;
+            double scale = Math.Min(region.Width / (double)image.Width,
+                region.Height / (double)image.Height);
+            int w = Math.Max(1, (int)Math.Round(image.Width * scale));
+            int h = Math.Max(1, (int)Math.Round(image.Height * scale));
+            // Keep the two image boundaries close to the middle reference seam.
+            int x = alignRight ? region.Right - w : region.Left;
+            int y = region.Top + (region.Height - h) / 2;
+            g.DrawImage(image, new Rectangle(x, y, w, h),
+                new Rectangle(0, 0, image.Width, image.Height), GraphicsUnit.Pixel);
+        }
+
+        // Only builds in memory: never writes the individual Yin/Yang user-facing files.
+        private static Bitmap BuildUserCombinedFinalOverlay(
+            Dictionary<string, string> savedOverlayPaths)
+        {
+            if (savedOverlayPaths == null)
+                return null;
+
+            List<string> sectionPaths = new List<string>();
+            string path;
+            if (savedOverlayPaths.TryGetValue("A", out path) && File.Exists(path))
+                sectionPaths.Add(path);
+            if (savedOverlayPaths.TryGetValue("B", out path) && File.Exists(path))
+                sectionPaths.Add(path);
+            if (sectionPaths.Count == 0)
+                return null;
+
+            const int sectionGap = 16;
+            List<Bitmap> bitmaps = new List<Bitmap>();
+            try
+            {
+                foreach (string sectionPath in sectionPaths)
+                {
+                    Bitmap bitmap = new Bitmap(sectionPath);
+                    bitmap.RotateFlip(RotateFlipType.Rotate90FlipNone);
+                    bitmaps.Add(bitmap);
+                }
+                int canvasWidth = bitmaps.Max(b => b.Width);
+                int canvasHeight = bitmaps.Sum(b => b.Height) +
+                    sectionGap * Math.Max(0, bitmaps.Count - 1);
+                Bitmap canvas = new Bitmap(canvasWidth, canvasHeight);
+                try
+                {
+                    using (Graphics g = Graphics.FromImage(canvas))
+                    {
+                        g.Clear(Color.Black);
+                        int y = 0;
+                        foreach (Bitmap bitmap in bitmaps)
+                        {
+                            g.DrawImageUnscaled(bitmap, 0, y);
+                            y += bitmap.Height + sectionGap;
+                        }
+                    }
+                    return canvas;
+                }
+                catch
+                {
+                    canvas.Dispose();
+                    throw;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[FontV15][UserCombinedOverlay] " + ex);
+                return null;
+            }
+            finally
+            {
+                foreach (Bitmap bitmap in bitmaps)
+                    bitmap.Dispose();
+            }
+        }
+
+        /// <summary>
+        /// Yin 3pt: side-by-side interpretation of the SAME two actual scoring masks.
+        /// Normal: Golden & ~Measured = red-only; reverse: Measured & ~Golden = green-only.
+        /// Reverse is a hypothesis for inspection and MUST NOT replace official NG scoring.
+        /// </summary>
+        private static void SaveYinThreePtDirectionalDiagnostic(
+            Mat golden, Mat alignedGray, Mat measured, Mat normalDefect, Mat reverseCandidate,
+            double threshold, int miss, int extra, int foreground, int background)
+        {
+            string dir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                "FontAlignment_Debug", "Yin", "3pt_DirectionCompare");
+            Directory.CreateDirectory(dir);
+            // Images are exactly the per-font mats entering official scoring.
+            CvInvoke.Imwrite(Path.Combine(dir, "01_GOLDEN.png"), golden);
+            CvInvoke.Imwrite(Path.Combine(dir, "02_ALIGNED_GRAY.png"), alignedGray);
+            CvInvoke.Imwrite(Path.Combine(dir, "03_MEASURED_BINARY.png"), measured);
+            CvInvoke.Imwrite(Path.Combine(dir, "04_NORMAL_GOLDEN_MINUS_MEASURED.png"), normalDefect);
+            CvInvoke.Imwrite(Path.Combine(dir, "05_REVERSE_MEASURED_MINUS_GOLDEN.png"), reverseCandidate);
+            using (Bitmap overlay = MakeEngineeringFontOverlay(golden, measured))
+                overlay.Save(Path.Combine(dir, "06_RED_GREEN_OVERLAY.png"), ImageFormat.Png);
+
+            double normalRate = foreground > 0 ? 100.0 * miss / foreground : 0.0;
+            double reverseRate = background > 0 ? 100.0 * extra / background : 0.0;
+            File.WriteAllLines(Path.Combine(dir, "07_DIRECTION_COMPARE.txt"), new string[]
+            {
+                "generated_time=" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss"),
+                "side=Yin", "font=3pt", "threshold_0_255=" + threshold.ToString("F2", System.Globalization.CultureInfo.InvariantCulture),
+                "golden_foreground_pixels=" + foreground,
+                "golden_background_pixels=" + background,
+                "normal_missing_pixels=" + miss,
+                "reverse_extra_pixels=" + extra,
+                "normal_missing_rate_percent=" + normalRate.ToString("F4", System.Globalization.CultureInfo.InvariantCulture),
+                "reverse_extra_rate_percent=" + reverseRate.ToString("F4", System.Globalization.CultureInfo.InvariantCulture),
+                "normal=Golden AND NOT Measured", "reverse=Measured AND NOT Golden",
+                "Yin official mapping: green (reverse) = missing print, red (normal) = blockage.",
+                "Both rates use different denominators; compare image positions, not just percentages.",
+                "Yin official scoring uses reverse as missing print. Yang is UNCHANGED."
+            });
         }
 
         private static bool ShouldSaveDebug(OCT_Parameters_SaveOptions saveOptions)
