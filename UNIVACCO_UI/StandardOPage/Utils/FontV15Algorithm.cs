@@ -22,7 +22,7 @@ namespace StandardOPage
     /// 4. 每一字級在預期位置 ±40 px 做局部 NCC。
     /// 5. 再於 ±5 px 做 X/Y 精細 NCC 對位。
     /// 6. 對位完成後，實測影像改用工程介面各字級 Threshold 二值化。
-    /// 7. Template - Measured 產生缺燙；Measured - Template 產生塞版。
+    /// 7. Yin/ Yang 缺燙與塞版分子方向沿用原分類；四項百分比分母統一用 Golden 字體前景。
     ///
     /// 為了相容目前 C-Board 舊模板（例如 21x575），若找不到真正的 v15
     /// 高解析模板，本類別會將舊模板等比例放大並置中到該字級的固定區段。
@@ -96,7 +96,7 @@ namespace StandardOPage
                         int missing = isYin ? greenPixels : redPixels;
                         int blocking = isYin ? redPixels : greenPixels;
                         int missingBase = fg; // Yin: green pixels / Golden WHITE; Yang unchanged
-                        int blockingBase = isYin ? fg : bg;
+                        int blockingBase = fg; // Both Yin/Yang block rates use Golden foreground
                         SetFontResult(d, i, missingBase > 0 ? missing * 100.0 / missingBase : 0);
                         SetFontResult(b, i, blockingBase > 0 ? blocking * 100.0 / blockingBase : 0);
                         totalMissing += missing;
@@ -199,7 +199,7 @@ namespace StandardOPage
                         : (fg > 0 ? 100.0 * CountWhitePixels(defect) / fg : 0);
                     blockPercent = isYin
                         ? (fg > 0 ? 100.0 * CountWhitePixels(defect) / fg : 0)
-                        : (bg > 0 ? 100.0 * CountWhitePixels(block) / bg : 0);
+                        : (fg > 0 ? 100.0 * CountWhitePixels(block) / fg : 0);
                     // Both images are the SAME font band and use the SAME engineering threshold.
                     const int labelHeight = 34;
                     const int gap = 12;
@@ -385,9 +385,9 @@ namespace StandardOPage
             {
                 get
                 {
-                    return TemplateBackgroundPixels <= 0
+                    return TemplateForegroundPixels <= 0
                         ? 0.0
-                        : BlockPixels * 100.0 / TemplateBackgroundPixels;
+                        : BlockPixels * 100.0 / TemplateForegroundPixels;
                 }
             }
 
@@ -761,10 +761,10 @@ namespace StandardOPage
                 int goldenForeground = CountWhitePixels(templateForegroundValid);
                 int validPixels = CountWhitePixels(alignedValidMask);
                 int goldenBackground = Math.Max(0, validPixels - goldenForeground);
-                // FontInfo holds the denominator of each physical defect score.
-                // Yin missing green area is normalized by Golden WHITE font area.
+                // Both physical defect/block percentages use the valid Golden WHITE area.
+                // FontInfo.TemplateBackgroundPixels retains actual Golden background as metadata.
                 int foregroundPixels = goldenForeground; // Yin missing denominator = Golden WHITE
-                int backgroundPixels = isYin ? goldenForeground : goldenBackground;
+                int backgroundPixels = goldenForeground; // block-score denominator; actual bg stays in goldenBackground
 
                 double defectPercentage =
                     foregroundPixels <= 0
@@ -787,7 +787,7 @@ namespace StandardOPage
                     Defect_Pixels = defectPixels,
                     Block_Pixels = blockPixels,
                     TemplateForegroundPixels = foregroundPixels,
-                    TemplateBackgroundPixels = backgroundPixels
+                    TemplateBackgroundPixels = goldenBackground // Preserve actual Golden background metadata
                 };
 
                 Debug.WriteLine(
@@ -887,8 +887,8 @@ namespace StandardOPage
                     : 0.0;
 
             blockResults.Block_Total_Percentage =
-                backgroundPixels > 0
-                    ? blockPixels * 100.0 / backgroundPixels
+                foregroundPixels > 0
+                    ? blockPixels * 100.0 / foregroundPixels
                     : 0.0;
         }
 
@@ -979,6 +979,18 @@ namespace StandardOPage
                 double engineeringThreshold = GetEngineeringThreshold(
                     currentParams, fontIndex, isYin, saveOptions);
                 Mat aligned = FontBinaryWithThreshold(raw, isYin, engineeringThreshold);
+                // Explicitly zero the scoring image for ignored ROIs. This also
+                // stays correct for extreme engineering thresholds (0 or 255),
+                // where a neutral input gray alone would not guarantee zero.
+                foreach (var ignored in group.Ignored.Where(row => row.FontPt == pt))
+                {
+                    Rectangle localRoi = Rectangle.Intersect(
+                        new Rectangle(0, 0, width, height),
+                        new Rectangle(ignored.Roi.X - left, ignored.Roi.Y,
+                            ignored.Roi.Width, ignored.Roi.Height));
+                    if (localRoi.Width > 0 && localRoi.Height > 0)
+                        CvInvoke.Rectangle(aligned, localRoi, new MCvScalar(0), -1);
+                }
                 if (saveScoreOverlay)
                 {
                     // 精確重用當次正式缺燙/塞版計分的 aligned，不重新二值化。
@@ -1031,7 +1043,7 @@ namespace StandardOPage
                     SetFontImg(original, fontIndex, EnsureBgr(raw));
                     SetFontImg(blocks, fontIndex, block);
                     SetFontImg(defects, fontIndex, defect);
-                    SetFontResult(blockStats, fontIndex, (isYin ? fg : bg) > 0 ? extra * 100.0 / (isYin ? fg : bg) : 0);
+                    SetFontResult(blockStats, fontIndex, fg > 0 ? extra * 100.0 / fg : 0);
                     SetFontResult(defectStats, fontIndex, fg > 0 ? miss * 100.0 / fg : 0);
                     infos.Add(new FontInfo
                     {
@@ -1041,9 +1053,9 @@ namespace StandardOPage
                         Block_Pixels = extra,
                         Defect_Pixels = miss,
                         TemplateForegroundPixels = fg,
-                        TemplateBackgroundPixels = isYin ? fg : bg
+                        TemplateBackgroundPixels = bg // Actual Golden background area, retained for diagnostics
                     });
-                    allMiss += miss; allExtra += extra; allForeground += fg; allBackground += isYin ? fg : bg;
+                    allMiss += miss; allExtra += extra; allForeground += fg; allBackground += bg;
                     // Transfer ownership to result objects.
                     block = null; defect = null;
                     Debug.WriteLine($"[NativeFont][{side}][{pt}pt] aligned characters={group.Characters.Count(c => c.FontPt == pt)}");
@@ -1067,7 +1079,7 @@ namespace StandardOPage
                 }
             }
             defectStats.Defect_Total_Percentage = allForeground > 0 ? allMiss * 100 / allForeground : 0;
-            blockStats.Block_Total_Percentage = allBackground > 0 ? allExtra * 100 / allBackground : 0;
+            blockStats.Block_Total_Percentage = allForeground > 0 ? allExtra * 100.0 / allForeground : 0;
             return (original, blocks, blockStats, defects, defectStats, infos);
         }
 
@@ -1328,9 +1340,9 @@ namespace StandardOPage
                         : totalDefectPixels * 100.0 / totalTemplateForeground;
 
                 blockResults.Block_Total_Percentage =
-                    totalTemplateBackground <= 0
+                    totalTemplateForeground <= 0
                         ? 0.0
-                        : totalBlockPixels * 100.0 / totalTemplateBackground;
+                        : totalBlockPixels * 100.0 / totalTemplateForeground;
 
                 if (ShouldSaveDebug(saveOptions))
                 {
@@ -3347,8 +3359,26 @@ namespace StandardOPage
                         "group=" + group.Group,
                         "strip_start_x=" + group.StripStartX,
                         "ecc_rotation_deg=" + group.EccRotation.ToString("F4", System.Globalization.CultureInfo.InvariantCulture),
-                        "matched_characters=" + group.Characters.Count
+                        "matched_characters=" + group.Characters.Count,
+                        "ignored_characters=" + group.Ignored.Count,
+                        "ignored_list=" + string.Join(";", group.Ignored.Select(row =>
+                            row.FontPt + "pt L#" + row.LeftToRightIndex
+                            + " (golden#" + row.CharacterIndex + ")"))
                     });
+
+                File.WriteAllLines(Path.Combine(dir, "05_IGNORED_GLYPHS.csv"),
+                    new[] { "side,group,font_pt,index_left_to_right,index_top_to_bottom,x,y,width,height" }
+                    .Concat(group.Ignored.Select(row => string.Join(",", new[]
+                    {
+                        group.Side, group.Group,
+                        row.FontPt.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.LeftToRightIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.CharacterIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.Roi.X.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.Roi.Y.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.Roi.Width.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        row.Roi.Height.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    }))));
             }
         }
 
@@ -3576,7 +3606,7 @@ namespace StandardOPage
                 overlay.Save(Path.Combine(dir, "06_RED_GREEN_OVERLAY.png"), ImageFormat.Png);
 
             double normalRate = foreground > 0 ? 100.0 * miss / foreground : 0.0;
-            double reverseRate = background > 0 ? 100.0 * extra / background : 0.0;
+            double reverseRate = foreground > 0 ? 100.0 * extra / foreground : 0.0;
             File.WriteAllLines(Path.Combine(dir, "07_DIRECTION_COMPARE.txt"), new string[]
             {
                 "generated_time=" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss"),
@@ -3589,8 +3619,8 @@ namespace StandardOPage
                 "reverse_extra_rate_percent=" + reverseRate.ToString("F4", System.Globalization.CultureInfo.InvariantCulture),
                 "normal=Golden AND NOT Measured", "reverse=Measured AND NOT Golden",
                 "Yin official mapping: green (reverse) = missing print, red (normal) = blockage.",
-                "Both rates use different denominators; compare image positions, not just percentages.",
-                "Yin official scoring uses reverse as missing print. Yang is UNCHANGED."
+                "Both rates use Golden foreground as denominator. Normal=Yin blockage; reverse=Yin missing print.",
+                "Yin missing-print direction uses reverse; Yang direction unchanged, but Yang block denominator now uses Golden foreground."
             });
         }
 

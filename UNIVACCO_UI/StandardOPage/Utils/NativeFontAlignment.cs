@@ -50,6 +50,146 @@ namespace StandardOPage
         }
     }
 
+
+    // Per-glyph ignore rules are read on EACH inspection from the same GoldenSample
+    // folder as character_coordinates.csv. No rebuild/restart is needed for edits.
+    // CSV format: side,font_pt,index_top_to_bottom
+    // Example: Yin,7,15  /  Yang,7,15  /  Both,7,15
+    // Ignore CSV supports user-facing LEFT-to-RIGHT indices while preserving
+    // Golden Sample's original top-to-bottom indices in all matcher coordinates.
+    // Old index_top_to_bottom files remain accepted for backward compatibility.
+    public static class FontIgnoreSettings
+    {
+        public const string ConfigFileName = "ignored_characters.csv";
+
+        private static string Key(string side, int pt, int index)
+        {
+            return side + "|" + pt.ToString(CultureInfo.InvariantCulture)
+                + "|" + index.ToString(CultureInfo.InvariantCulture);
+        }
+
+        // Native Golden images are vertical. Larger original indices are on the
+        // LEFT after the user-facing horizontal image is rotated for display.
+        // Ranking, not maxIndex - index, handles non-1 starts and missing indices.
+        public static int ToLeftToRightIndex(
+            GoldenCharacters.Glyph glyph,
+            IEnumerable<GoldenCharacters.Glyph> glyphs)
+        {
+            return 1 + glyphs.Count(r =>
+                r.Side == glyph.Side && r.FontPt == glyph.FontPt
+                && r.Index > glyph.Index);
+        }
+
+        public static HashSet<string> Load(string goldenDirectory)
+        {
+            var rules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string path = Path.Combine(goldenDirectory, ConfigFileName);
+            if (!File.Exists(path))
+            {
+                Debug.WriteLine("[NativeFont][Ignore] Config missing; no ignored characters: " + path);
+                return rules;
+            }
+
+            try
+            {
+                // IMPORTANT: the active index column is selected by its HEADER.
+                // left-to-right config -> convert to original Golden index.
+                // legacy top-to-bottom config -> preserve original interpretation.
+                bool leftToRight = false;
+                List<GoldenCharacters.Glyph> sourceGlyphs = null;
+                int lineNo = 0;
+                foreach (string raw in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    lineNo++;
+                    string line = raw.Trim().TrimStart('\ufeff');
+                    if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)
+                        || line.StartsWith("//", StringComparison.Ordinal))
+                        continue;
+
+                    string[] fields = line.Split(',');
+                    if (fields.Length == 3 &&
+                        fields[0].Trim().Equals("side", StringComparison.OrdinalIgnoreCase))
+                    {
+                        string indexHeader = fields[2].Trim();
+                        if (indexHeader.Equals("index_left_to_right", StringComparison.OrdinalIgnoreCase))
+                        {
+                            leftToRight = true;
+                            sourceGlyphs = GoldenCharacters.ReadCsv(goldenDirectory);
+                        }
+                        else if (indexHeader.Equals("index_top_to_bottom", StringComparison.OrdinalIgnoreCase))
+                        {
+                            leftToRight = false;
+                        }
+                        else
+                            throw new InvalidDataException("Unknown ignore index header: " + indexHeader);
+                        continue;
+                    }
+
+                    int pt, index;
+                    if (fields.Length != 3
+                        || !int.TryParse(fields[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out pt)
+                        || !int.TryParse(fields[2].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out index)
+                        || pt < 3 || pt > 12 || index < 1)
+                    {
+                        Debug.WriteLine("[NativeFont][Ignore] Invalid CSV row " + lineNo + ": " + line);
+                        continue;
+                    }
+
+                    string side = fields[0].Trim();
+                    IEnumerable<string> sides;
+                    if (side.Equals("Both", StringComparison.OrdinalIgnoreCase)
+                        || side.Equals("All", StringComparison.OrdinalIgnoreCase) || side == "*")
+                        sides = new[] { "Yin", "Yang" };
+                    else if (side.Equals("Yin", StringComparison.OrdinalIgnoreCase))
+                        sides = new[] { "Yin" };
+                    else if (side.Equals("Yang", StringComparison.OrdinalIgnoreCase))
+                        sides = new[] { "Yang" };
+                    else
+                    {
+                        Debug.WriteLine("[NativeFont][Ignore] Unknown side at row " + lineNo + ": " + side);
+                        continue;
+                    }
+
+                    foreach (string actualSide in sides)
+                    {
+                        int originalIndex = index;
+                        if (leftToRight)
+                        {
+                            var ordered = sourceGlyphs
+                                .Where(g => g.Side == actualSide && g.FontPt == pt)
+                                .OrderByDescending(g => g.Index).ToArray();
+                            if (index > ordered.Length)
+                            {
+                                Debug.WriteLine("[NativeFont][Ignore] Index out of range at row "
+                                    + lineNo + ": " + actualSide + "," + pt + "," + index
+                                    + " (available " + ordered.Length + ")");
+                                continue;
+                            }
+                            originalIndex = ordered[index - 1].Index;
+                        }
+                        rules.Add(Key(actualSide, pt, originalIndex));
+                        Debug.WriteLine("[NativeFont][Ignore] " + actualSide + " " + pt
+                            + "pt left_to_right=" + (leftToRight ? index.ToString() : "legacy")
+                            + " golden_index=" + originalIndex);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[NativeFont][Ignore] Read failure; all ignore rules disabled for this run: " + ex);
+                rules.Clear();
+            }
+            Debug.WriteLine("[NativeFont][Ignore] Loaded keys=" + rules.Count + " from " + path);
+            return rules;
+        }
+
+        public static bool ShouldIgnore(GoldenCharacters.Glyph glyph, HashSet<string> rules)
+        {
+            return glyph != null && rules != null
+                && rules.Contains(Key(glyph.Side, glyph.FontPt, glyph.Index));
+        }
+    }
+
     // Reads exactly the BMP/CSV Golden Sample format supplied by the user; no legacy template scaling.
     public static class GoldenCharacters
     {
@@ -173,7 +313,7 @@ namespace StandardOPage
     {
         public sealed class Match
         {
-            public int BestDx, BestDy, UsedDx, UsedDy, SearchRadiusUsed;
+            public int BestDx, BestDy, UsedDx, UsedDy, SearchRadiusUsed, SearchYRadiusUsed;
             public bool Accepted;
             public double Before, Score;
             public string Reason;
@@ -427,7 +567,7 @@ namespace StandardOPage
         }
         public static Match BandMatch(byte[,] golden, byte[,] test, Rectangle roi,
             int xRadius = 48, int yRadius = 12, int searchPad = 12, int maxXRadius = 96, bool retry = false,
-            bool applyClosingForAlignment = false, int closingKernelSize = 5)
+            bool applyClosingForAlignment = false, int closingKernelSize = 5, int maxYRadius = 24)
         {
             int x0 = roi.X, y0 = roi.Y, W = roi.Width, H = roi.Height;
             int gh = golden.GetLength(0), gw = golden.GetLength(1), th = test.GetLength(0), tw = test.GetLength(1);
@@ -519,10 +659,24 @@ namespace StandardOPage
                     for (int dx = Math.Max(-xRadius, c.Dx - 3); dx <= Math.Min(xRadius, c.Dx + 3); dx++) evaluate(dx, dy);
             Candidate best = sorted(options)[0]; double before = ev(0, 0);
             bool xBoundary = Math.Abs(best.Dx) >= xRadius - 1;
-            if (xBoundary && !retry && maxXRadius > xRadius)
-                return BandMatch(golden, test, roi, Math.Min(maxXRadius, Math.Max(xRadius + 20, xRadius * 2)), yRadius, searchPad, maxXRadius, true, applyClosingForAlignment, closingKernelSize);
-            bool boundary = xBoundary || Math.Abs(best.Dy) >= yRadius - 1;
-            bool accepted = best.Score < 2.7 && !boundary && (before - best.Score >= .15 || (best.Dx == 0 && best.Dy == 0));
+            bool yBoundary = Math.Abs(best.Dy) >= yRadius - 1;
+            // If the best match sits on a search boundary, expand ONLY that axis and
+            // re-run the exact same skeleton matcher. Never accept a boundary hit
+            // blindly, and never change the result of an in-range successful match.
+            int nextXRadius = xRadius;
+            int nextYRadius = yRadius;
+            if (xBoundary && xRadius < maxXRadius)
+                nextXRadius = Math.Min(maxXRadius, Math.Max(xRadius + 20, xRadius * 2));
+            if (yBoundary && yRadius < maxYRadius)
+                nextYRadius = Math.Min(maxYRadius, yRadius + 8);
+            if (nextXRadius != xRadius || nextYRadius != yRadius)
+                return BandMatch(golden, test, roi, nextXRadius, nextYRadius,
+                    searchPad, maxXRadius, true, applyClosingForAlignment,
+                    closingKernelSize, maxYRadius);
+
+            bool boundary = xBoundary || yBoundary;
+            bool accepted = best.Score < 2.7 && !boundary &&
+                (before - best.Score >= .15 || (best.Dx == 0 && best.Dy == 0));
             int udx = accepted ? best.Dx : 0, udy = accepted ? best.Dy : 0;
             return new Match
             {
@@ -536,7 +690,10 @@ namespace StandardOPage
                 Before = before,
                 Accepted = accepted,
                 SearchRadiusUsed = xRadius,
-                Reason = boundary ? "boundary" : !accepted ? "weak_or_poor_match" : "accepted",
+                SearchYRadiusUsed = yRadius,
+                Reason = boundary ? (xBoundary && yBoundary ? "xy_boundary" :
+                          xBoundary ? "x_boundary" : "y_boundary") :
+                         !accepted ? "weak_or_poor_match" : "accepted",
                 GoldenRoi = roi,
                 Golden = g,
                 Original = Slice(test, x0, y0, W, H),
@@ -556,8 +713,13 @@ namespace StandardOPage
     {
         public sealed class CharacterResult
         {
-            public int FontPt, CharacterIndex;
+            public int FontPt, CharacterIndex, LeftToRightIndex;
             public CharacterBandMatcher.Match Alignment;
+        }
+        public sealed class IgnoredCharacter
+        {
+            public int FontPt, CharacterIndex, LeftToRightIndex;
+            public Rectangle Roi;
         }
         public sealed class GroupResult
         {
@@ -566,7 +728,53 @@ namespace StandardOPage
             public double EccRotation;
             public byte[,] Golden, Aligned, AlignedGray;
             public List<CharacterResult> Characters = new List<CharacterResult>();
+            public List<IgnoredCharacter> Ignored = new List<IgnoredCharacter>();
         }
+
+        // Blacken ignored ROIs in BOTH overlay buffers and the engineering-scoring
+        // gray buffer. Yang must use gray=255 because scoring inverts Yang's binary.
+        // Do this only after group and per-character alignment have finished, so the
+        // other characters and group registration remain bit-for-bit as before.
+        private static void MaskIgnoredCharacters(
+            GroupResult group,
+            IEnumerable<GoldenCharacters.Glyph> ignored,
+            Dictionary<int, int> xoffsets,
+            int groupLeft,
+            bool isYin,
+            IEnumerable<GoldenCharacters.Glyph> allGlyphs)
+        {
+            int height = group.Golden.GetLength(0);
+            int width = group.Golden.GetLength(1);
+            Rectangle frame = new Rectangle(0, 0, width, height);
+            byte neutralGray = isYin ? (byte)0 : (byte)255;
+
+            foreach (GoldenCharacters.Glyph glyph in ignored)
+            {
+                int dx = xoffsets[glyph.FontPt] - groupLeft;
+                Rectangle roi = Rectangle.Intersect(frame,
+                    new Rectangle(dx + glyph.X0, glyph.Y0,
+                        glyph.X1 - glyph.X0, glyph.Y1 - glyph.Y0));
+                if (roi.Width <= 0 || roi.Height <= 0)
+                    continue;
+                for (int y = roi.Y; y < roi.Bottom; y++)
+                {
+                    for (int x = roi.X; x < roi.Right; x++)
+                    {
+                        group.Golden[y, x] = 0;
+                        group.Aligned[y, x] = 0;
+                        group.AlignedGray[y, x] = neutralGray;
+                    }
+                }
+                group.Ignored.Add(new IgnoredCharacter
+                {
+                    FontPt = glyph.FontPt,
+                    CharacterIndex = glyph.Index,
+                    LeftToRightIndex = FontIgnoreSettings.ToLeftToRightIndex(glyph, allGlyphs),
+                    Roi = roi
+                });
+            }
+        }
+
         // Diagnostic output only. Does not change matching, scoring, acceptance or parallel work.
         // DEBUG ONLY: visualize the CSV Golden ROI and the search envelope for each glyph.
         // All rectangles are drawn on a COPY of the already computed overlay.
@@ -580,7 +788,7 @@ namespace StandardOPage
                 Directory.CreateDirectory(root);
                 int w = group.Golden.GetLength(1), h = group.Golden.GetLength(0);
                 var frame = new Rectangle(0, 0, w, h);
-                var csv = new StringBuilder("side,group,font_pt,char_index,roi_x,roi_y,roi_width,roi_height,search_x,search_y,search_width,search_height,best_dx,best_dy,used_dx,used_dy,accepted");
+                var csv = new StringBuilder("side,group,font_pt,index_left_to_right,index_top_to_bottom,roi_x,roi_y,roi_width,roi_height,search_x,search_y,search_width,search_height,best_dx,best_dy,used_dx,used_dy,accepted,search_y_radius_used,best_score,before_score,reason");
                 csv.AppendLine();
                 using (Mat overlay = CharacterBandMatcher.BuildFinalOverlay(group.Golden, group.Aligned))
                 {
@@ -595,7 +803,7 @@ namespace StandardOPage
                                 Rectangle roi = Rectangle.Intersect(frame, m.GoldenRoi);
                                 int radiusX = m.SearchRadiusUsed;
                                 // The current normal per-character vertical search radius is 12 px.
-                                int radiusY = FontRoiBoxDebugSettings.SearchYRadius;
+                                int radiusY = m.SearchYRadiusUsed;
                                 Rectangle search = Rectangle.Intersect(frame,
                                     new Rectangle(m.GoldenRoi.X - radiusX, m.GoldenRoi.Y - radiusY,
                                         m.GoldenRoi.Width + 2 * radiusX,
@@ -605,8 +813,8 @@ namespace StandardOPage
                                     CvInvoke.Rectangle(ptCanvas, search, new MCvScalar(255, 150, 0), 1);
                                 if (roi.Width > 0 && roi.Height > 0)
                                     CvInvoke.Rectangle(ptCanvas, roi, new MCvScalar(0, 255, 255), 1);
-                                string label = row.FontPt.ToString(CultureInfo.InvariantCulture) + "pt #" +
-                                    row.CharacterIndex.ToString(CultureInfo.InvariantCulture);
+                                string label = row.FontPt.ToString(CultureInfo.InvariantCulture) + "pt L#" +
+                                    row.LeftToRightIndex.ToString(CultureInfo.InvariantCulture);
                                 if (roi.Width > 0 && roi.Height > 0)
                                     CvInvoke.PutText(ptCanvas, label,
                                         new Point(roi.X, Math.Max(11, roi.Y - 3)),
@@ -614,6 +822,7 @@ namespace StandardOPage
                                 csv.AppendLine(string.Join(",", new[] {
                                 group.Side, group.Group,
                                 row.FontPt.ToString(CultureInfo.InvariantCulture),
+                                row.LeftToRightIndex.ToString(CultureInfo.InvariantCulture),
                                 row.CharacterIndex.ToString(CultureInfo.InvariantCulture),
                                 m.GoldenRoi.X.ToString(CultureInfo.InvariantCulture),
                                 m.GoldenRoi.Y.ToString(CultureInfo.InvariantCulture),
@@ -627,7 +836,11 @@ namespace StandardOPage
                                 m.BestDy.ToString(CultureInfo.InvariantCulture),
                                 m.UsedDx.ToString(CultureInfo.InvariantCulture),
                                 m.UsedDy.ToString(CultureInfo.InvariantCulture),
-                                m.Accepted ? "1" : "0" }));
+                                m.Accepted ? "1" : "0",
+                                m.SearchYRadiusUsed.ToString(CultureInfo.InvariantCulture),
+                                m.Score.ToString("F6", CultureInfo.InvariantCulture),
+                                m.Before.ToString("F6", CultureInfo.InvariantCulture),
+                                m.Reason }));
                             }
                             ptCanvas.Save(Path.Combine(root,
                                 ptGroup.Key.ToString("00", CultureInfo.InvariantCulture) + "pt_ROI_BOXES.png"));
@@ -1067,6 +1280,7 @@ namespace StandardOPage
             if (side != "Yin" && side != "Yang") throw new ArgumentException("side must be Yin or Yang");
             Stopwatch watch = Stopwatch.StartNew();
             var loaded = GoldenCharacters.Load(goldenDirectory, side);
+            var ignoreKeys = FontIgnoreSettings.Load(goldenDirectory);
             Debug.WriteLine("[NativeFont][" + side + "] golden load ms=" + watch.ElapsedMilliseconds);
             byte[,] refbin = GoldenCharacters.Binary(loaded.reference, side == "Yin");
             using (Mat srcGray = new Mat())
@@ -1115,8 +1329,18 @@ namespace StandardOPage
                     // Every glyph has an independent search, so compute matches concurrently.
                     // Never write to GroupResult/Aligned from worker threads. A deterministic
                     // single-threaded merge retains the original CSV/character ordering.
-                    var glyphs = loaded.glyphs.Where(r => r.FontPt >= first && r.FontPt <= last)
+                    var allGlyphs = loaded.glyphs.Where(r => r.FontPt >= first && r.FontPt <= last)
                         .OrderBy(r => r.FontPt).ThenBy(r => r.Index).ToArray();
+                    var ignoredGlyphs = allGlyphs
+                        .Where(r => FontIgnoreSettings.ShouldIgnore(r, ignoreKeys)).ToArray();
+                    var glyphs = allGlyphs
+                        .Where(r => !FontIgnoreSettings.ShouldIgnore(r, ignoreKeys)).ToArray();
+                    Debug.WriteLine("[NativeFont][" + side + "][" + group + "] skipped="
+                        + ignoredGlyphs.Length + ", aligned=" + glyphs.Length
+                        + (ignoredGlyphs.Length == 0 ? "" : ", ignored=" + string.Join(";",
+                            ignoredGlyphs.Select(r => r.FontPt + "pt L#"
+                                + FontIgnoreSettings.ToLeftToRightIndex(r, allGlyphs)
+                                + " (golden#" + r.Index + ")"))));
                     // 依上方 FontClosingSettings 設定指定字級與 Closing 核心。
                     // 原圖和瑕疵檢測完全不受影響。
                     int closingKernelSize = FontClosingSettings.KernelSize;
@@ -1158,6 +1382,7 @@ namespace StandardOPage
                         {
                             FontPt = glyph.FontPt,
                             CharacterIndex = glyph.Index,
+                            LeftToRightIndex = FontIgnoreSettings.ToLeftToRightIndex(glyph, allGlyphs),
                             Alignment = match
                         });
                         for (int y = 0; y < roi.Height; y++)
@@ -1170,6 +1395,9 @@ namespace StandardOPage
                                     result.AlignedGray[roi.Y + y, roi.X + x] = ecc.gray[sy, sx];
                             }
                     }
+                    // Mask after all active matches are merged. Never change the
+                    // shared GoldenCharacters cache or the original captured image.
+                    MaskIgnoredCharacters(result, ignoredGlyphs, loaded.xoffsets, left, side == "Yin", allGlyphs);
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] parallel glyph ms="
                         + glyphWatch.ElapsedMilliseconds + ", workers=" + workerCount + ", globalMax=4");
                     results.Add(result);
