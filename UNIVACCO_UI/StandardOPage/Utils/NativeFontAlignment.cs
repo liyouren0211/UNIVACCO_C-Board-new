@@ -17,14 +17,6 @@ using System.Threading;
 namespace StandardOPage
 {
 
-    public static class FontRoiBoxDebugSettings
-    {
-        // 只影響額外輸出圖片，不改變對位與瑕疵判斷。
-        public const bool Enabled = true;
-        // 與目前呼叫 BandMatch 時使用的 yRadius = 12 一致。
-        public const int SearchYRadius = 12;
-    }
-
     // ================================================================
     // 字體 Closing 設定：只需要修改這裡，不必動下面的演算法。
     // ================================================================
@@ -187,6 +179,57 @@ namespace StandardOPage
         {
             return glyph != null && rules != null
                 && rules.Contains(Key(glyph.Side, glyph.FontPt, glyph.Index));
+        }
+    }
+
+    // Built-in image-boundary handling for ALL font sizes (3-12pt) and ALL glyphs
+    // on BOTH Yin/Yang sides. Interior glyphs keep the original matcher.
+    // Search margins are algorithm geometry, not external configuration values.
+    public static class FontEdgeAlignment
+    {
+        public const int MaxVerticalSearch = 24;
+        public const int SearchPadding = 12;
+        public const int AffineMargin = 4;
+        public const int SafeMargin = MaxVerticalSearch + SearchPadding + AffineMargin;
+
+        public struct CaptureMargins
+        {
+            public int YinTop, YinBottom, YangTop, YangBottom;
+        }
+
+        // Every valid glyph is eligible; only a glyph close enough to an image
+        // boundary actually needs the supplemental genuine-pixel search.
+        public static bool NeedsExtendedSearch(int roiY, int roiBottom, int imageHeight)
+        {
+            return roiY < SafeMargin || imageHeight - roiBottom < SafeMargin;
+        }
+
+        public static CaptureMargins RequiredMargins(string goldenDirectory)
+        {
+            var glyphs = GoldenCharacters.ReadCsv(goldenDirectory);
+            var margins = new CaptureMargins();
+            foreach (var glyph in glyphs)
+            {
+                if (glyph.SourceHeight <= 0 || glyph.Y0 < 0 || glyph.Y1 > glyph.SourceHeight
+                    || glyph.Y1 <= glyph.Y0)
+                    throw new InvalidDataException("Invalid Golden ROI bounds for edge alignment");
+                int needTop = Math.Max(0, SafeMargin - glyph.Y0);
+                int needBottom = Math.Max(0, glyph.Y1 + SafeMargin - glyph.SourceHeight);
+                if (glyph.Side == "Yin")
+                {
+                    margins.YinTop = Math.Max(margins.YinTop, needTop);
+                    margins.YinBottom = Math.Max(margins.YinBottom, needBottom);
+                }
+                else if (glyph.Side == "Yang")
+                {
+                    margins.YangTop = Math.Max(margins.YangTop, needTop);
+                    margins.YangBottom = Math.Max(margins.YangBottom, needBottom);
+                }
+            }
+            Debug.WriteLine("[EdgeAlign] Required genuine rows: Yin(top/bottom)="
+                + margins.YinTop + "/" + margins.YinBottom + ", Yang(top/bottom)="
+                + margins.YangTop + "/" + margins.YangBottom);
+            return margins;
         }
     }
 
@@ -567,11 +610,31 @@ namespace StandardOPage
         }
         public static Match BandMatch(byte[,] golden, byte[,] test, Rectangle roi,
             int xRadius = 48, int yRadius = 12, int searchPad = 12, int maxXRadius = 96, bool retry = false,
-            bool applyClosingForAlignment = false, int closingKernelSize = 5, int maxYRadius = 24)
+            bool applyClosingForAlignment = false, int closingKernelSize = 5, int maxYRadius = 24,
+            byte[,] validMask = null)
         {
             int x0 = roi.X, y0 = roi.Y, W = roi.Width, H = roi.Height;
             int gh = golden.GetLength(0), gw = golden.GetLength(1), th = test.GetLength(0), tw = test.GetLength(1);
             if (x0 < 0 || y0 < 0 || x0 + W > gw || y0 + H > gh || W <= 0 || H <= 0) return null;
+            // For REAL-captured-image diagnostic only: reject any candidate
+            // containing pixels filled by the affine warp border. Baseline runs
+            // with validMask == null and retains exactly the original behavior.
+            int[,] invalidIntegral = null;
+            if (validMask != null)
+            {
+                if (validMask.GetLength(0) != th || validMask.GetLength(1) != tw)
+                    throw new ArgumentException("validMask dimensions must match test image");
+                invalidIntegral = new int[th + 1, tw + 1];
+                for (int yy = 0; yy < th; yy++)
+                {
+                    int rowInvalid = 0;
+                    for (int xx = 0; xx < tw; xx++)
+                    {
+                        if (validMask[yy, xx] == 0) rowInvalid++;
+                        invalidIntegral[yy + 1, xx + 1] = invalidIntegral[yy, xx + 1] + rowInvalid;
+                    }
+                }
+            }
             byte[,] g = Slice(golden, x0, y0, W, H);
             int bx0 = Math.Max(0, x0 - xRadius - searchPad), bx1 = Math.Min(tw, x0 + W + xRadius + searchPad);
             int by0 = Math.Max(0, y0 - yRadius - searchPad), by1 = Math.Min(th, y0 + H + yRadius + searchPad);
@@ -612,6 +675,15 @@ namespace StandardOPage
                 int sx = x0 + dx - bx0, sy = y0 + dy - by0;
                 if (sx < 0 || sy < 0 || sx + W > bx1 - bx0 || sy + H > by1 - by0)
                     return cache[key] = 99.0;
+                if (invalidIntegral != null)
+                {
+                    int ax = x0 + dx, ay = y0 + dy;
+                    int nInvalid = invalidIntegral[ay + H, ax + W]
+                        - invalidIntegral[ay, ax + W]
+                        - invalidIntegral[ay + H, ax]
+                        + invalidIntegral[ay, ax];
+                    if (nInvalid != 0) return cache[key] = 99.0;
+                }
                 int forwardCount = 0;
                 foreach (Point point in gy)
                     forwardBuffer[forwardCount++] = dt[sy + point.Y, sx + point.X];
@@ -672,7 +744,7 @@ namespace StandardOPage
             if (nextXRadius != xRadius || nextYRadius != yRadius)
                 return BandMatch(golden, test, roi, nextXRadius, nextYRadius,
                     searchPad, maxXRadius, true, applyClosingForAlignment,
-                    closingKernelSize, maxYRadius);
+                    closingKernelSize, maxYRadius, validMask);
 
             bool boundary = xBoundary || yBoundary;
             bool accepted = best.Score < 2.7 && !boundary &&
@@ -731,6 +803,144 @@ namespace StandardOPage
             public List<IgnoredCharacter> Ignored = new List<IgnoredCharacter>();
         }
 
+        private sealed class ARealComparison
+        {
+            public int FontPt, LeftIndex, GoldenIndex, RoiY, RoiBottom;
+            public int OriginalHeight, ExtraCapturedRows, ExtraCapturedTopRows;
+            public CharacterBandMatcher.Match Baseline, Real;
+            public bool Applied;
+            public string ApplyReason;
+        }
+
+        // Warp a source captured beyond the original crop with the SAME affine
+        // map already computed from the original NCC/ECC registration. No new
+        // coarse/group alignment is allowed for the comparison.
+        // Safety gate for each applied patch, not just the candidate search score.
+        // A genuine source pixel must exist for EVERY pixel of the ROI.
+        private static bool IsEntirelyReal(byte[,] mask, Rectangle roi, int dx, int dy)
+        {
+            if (mask == null) return false;
+            int sx = roi.X + dx, sy = roi.Y + dy;
+            if (sx < 0 || sy < 0 || sx + roi.Width > mask.GetLength(1)
+                || sy + roi.Height > mask.GetLength(0)) return false;
+            for (int y = sy; y < sy + roi.Height; y++)
+                for (int x = sx; x < sx + roi.Width; x++)
+                    if (mask[y, x] != 255) return false;
+            return true;
+        }
+
+        private static byte[,] FullValidMask(int height, int width)
+        {
+            byte[,] mask = new byte[height, width];
+            for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x++) mask[y, x] = 255;
+            return mask;
+        }
+
+        // Expand the golden reference only to cover EXTRA REAL captured rows.
+        // The measured image is never synthetically padded.
+        private static byte[,] ExtendGoldenWithBlankRows(byte[,] source,
+            int topRows, int bottomRows)
+        {
+            int h = source.GetLength(0), w = source.GetLength(1);
+            byte[,] enlarged = new byte[topRows + h + bottomRows, w];
+            Buffer.BlockCopy(source, 0, enlarged, topRows * w, h * w);
+            return enlarged;
+        }
+
+        // Conjugate the original affine transform by the vertical translation.
+        // This preserves the exact 0..originalHeight baseline coordinate system.
+        private static double[,] OffsetAffineForTopRows(double[,] original, int topRows)
+        {
+            var m = (double[,])original.Clone();
+            m[0, 2] = original[0, 2] - original[0, 1] * topRows;
+            m[1, 2] = original[1, 2] + (1.0 - original[1, 1]) * topRows;
+            return m;
+        }
+
+        private static string Number(double x)
+        {
+            return x.ToString("F6", CultureInfo.InvariantCulture);
+        }
+
+        private static string CsvMatch(CharacterBandMatcher.Match m)
+        {
+            if (m == null) return ",,,,,,,";
+            return string.Join(",", new[] {
+                m.BestDx.ToString(CultureInfo.InvariantCulture),
+                m.BestDy.ToString(CultureInfo.InvariantCulture),
+                m.UsedDx.ToString(CultureInfo.InvariantCulture),
+                m.UsedDy.ToString(CultureInfo.InvariantCulture),
+                m.Accepted ? "1" : "0",
+                Number(m.Before), Number(m.Score), m.Reason
+            });
+        }
+
+        // Short formal trace (CSV only). Tracks applied/rollback decision without
+        // creating baseline/best/used image sheets on every production inspection.
+        private static void SaveARealComparisons(string side, string group,
+            string alignMode, IEnumerable<ARealComparison> comparisons)
+        {
+            var all = comparisons.Where(c => c != null).OrderBy(c => c.FontPt).ThenBy(c => c.LeftIndex).ToArray();
+            if (all.Length == 0) return;
+            try
+            {
+                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
+                    "FontAlignment_AReal_Debug", side, group,
+                    DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture));
+                Directory.CreateDirectory(root);
+                var csv = new StringBuilder();
+                csv.AppendLine("side,group,mode,font_pt,index_left_to_right,index_top_to_bottom,"
+                    + "roi_y,roi_bottom,original_height,extra_real_rows,extra_real_top_rows,"
+                    + "baseline_best_dx,baseline_best_dy,baseline_used_dx,baseline_used_dy,baseline_accepted,baseline_score,"
+                    + "real_best_dx,real_best_dy,real_used_dx,real_used_dy,real_accepted,real_score,real_reason,"
+                    + "real_best_rows_beyond_old_crop,real_used_rows_beyond_old_crop,"
+                    + "real_best_rows_before_old_crop,real_used_rows_before_old_crop,"
+                    + "real_best_within_captured_range,production_result,real_applied,apply_reason");
+                foreach (var c in all)
+                {
+                    var baseline = c.Baseline;
+                    var real = c.Real;
+                    int extraBest = real == null ? 0 : Math.Max(0, c.RoiBottom + real.BestDy - c.OriginalHeight);
+                    int extraUsed = real == null ? 0 : Math.Max(0, c.RoiBottom + real.UsedDy - c.OriginalHeight);
+                    int beforeBest = real == null ? 0 : Math.Max(0, -(c.RoiY + real.BestDy));
+                    int beforeUsed = real == null ? 0 : Math.Max(0, -(c.RoiY + real.UsedDy));
+                    csv.AppendLine(string.Join(",", new[] {
+                        side, group, alignMode, c.FontPt.ToString(), c.LeftIndex.ToString(),
+                        c.GoldenIndex.ToString(), c.RoiY.ToString(), c.RoiBottom.ToString(),
+                        c.OriginalHeight.ToString(), c.ExtraCapturedRows.ToString(),
+                        c.ExtraCapturedTopRows.ToString(),
+                        baseline == null ? "" : baseline.BestDx.ToString(),
+                        baseline == null ? "" : baseline.BestDy.ToString(),
+                        baseline == null ? "" : baseline.UsedDx.ToString(),
+                        baseline == null ? "" : baseline.UsedDy.ToString(),
+                        baseline == null ? "" : (baseline.Accepted ? "1" : "0"),
+                        baseline == null ? "" : Number(baseline.Score),
+                        real == null ? "" : real.BestDx.ToString(),
+                        real == null ? "" : real.BestDy.ToString(),
+                        real == null ? "" : real.UsedDx.ToString(),
+                        real == null ? "" : real.UsedDy.ToString(),
+                        real == null ? "" : (real.Accepted ? "1" : "0"),
+                        real == null ? "" : Number(real.Score),
+                        real == null ? "" : real.Reason,
+                        extraBest.ToString(), extraUsed.ToString(),
+                        beforeBest.ToString(), beforeUsed.ToString(),
+                        extraBest <= c.ExtraCapturedRows
+                            && beforeBest <= c.ExtraCapturedTopRows ? "1" : "0",
+                        c.Applied ? "REAL_APPLIED" : "BASELINE_UNCHANGED",
+                        c.Applied ? "1" : "0", c.ApplyReason ?? ""
+                    }));
+                }
+                File.WriteAllText(Path.Combine(root, "A_REAL_COMPARE.csv"),
+                    csv.ToString(), new UTF8Encoding(true));
+                Debug.WriteLine("[AReal] comparison saved: " + root + " count=" + all.Length);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("[AReal] Diagnostic save failed: " + ex);
+            }
+        }
+
         // Blacken ignored ROIs in BOTH overlay buffers and the engineering-scoring
         // gray buffer. Yang must use gray=255 because scoring inverts Yang's binary.
         // Do this only after group and per-character alignment have finished, so the
@@ -772,170 +982,6 @@ namespace StandardOPage
                     LeftToRightIndex = FontIgnoreSettings.ToLeftToRightIndex(glyph, allGlyphs),
                     Roi = roi
                 });
-            }
-        }
-
-        // Diagnostic output only. Does not change matching, scoring, acceptance or parallel work.
-        // DEBUG ONLY: visualize the CSV Golden ROI and the search envelope for each glyph.
-        // All rectangles are drawn on a COPY of the already computed overlay.
-        private static void SaveGlyphRoiBoxes(GroupResult group, string mode)
-        {
-            if (!FontRoiBoxDebugSettings.Enabled) return;
-            try
-            {
-                string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
-                    "FontAlignment_ROI_Debug", mode, group.Side, group.Group);
-                Directory.CreateDirectory(root);
-                int w = group.Golden.GetLength(1), h = group.Golden.GetLength(0);
-                var frame = new Rectangle(0, 0, w, h);
-                var csv = new StringBuilder("side,group,font_pt,index_left_to_right,index_top_to_bottom,roi_x,roi_y,roi_width,roi_height,search_x,search_y,search_width,search_height,best_dx,best_dy,used_dx,used_dy,accepted,search_y_radius_used,best_score,before_score,reason");
-                csv.AppendLine();
-                using (Mat overlay = CharacterBandMatcher.BuildFinalOverlay(group.Golden, group.Aligned))
-                {
-                    foreach (var ptGroup in group.Characters.GroupBy(c => c.FontPt).OrderBy(g => g.Key))
-                    {
-                        using (Mat ptCanvas = overlay.Clone())
-                        {
-                            foreach (CharacterResult row in ptGroup)
-                            {
-                                var m = row.Alignment;
-                                if (m == null) continue;
-                                Rectangle roi = Rectangle.Intersect(frame, m.GoldenRoi);
-                                int radiusX = m.SearchRadiusUsed;
-                                // The current normal per-character vertical search radius is 12 px.
-                                int radiusY = m.SearchYRadiusUsed;
-                                Rectangle search = Rectangle.Intersect(frame,
-                                    new Rectangle(m.GoldenRoi.X - radiusX, m.GoldenRoi.Y - radiusY,
-                                        m.GoldenRoi.Width + 2 * radiusX,
-                                        m.GoldenRoi.Height + 2 * radiusY));
-                                // BGR blue: candidate search envelope. Yellow: Golden CSV ROI.
-                                if (search.Width > 0 && search.Height > 0)
-                                    CvInvoke.Rectangle(ptCanvas, search, new MCvScalar(255, 150, 0), 1);
-                                if (roi.Width > 0 && roi.Height > 0)
-                                    CvInvoke.Rectangle(ptCanvas, roi, new MCvScalar(0, 255, 255), 1);
-                                string label = row.FontPt.ToString(CultureInfo.InvariantCulture) + "pt L#" +
-                                    row.LeftToRightIndex.ToString(CultureInfo.InvariantCulture);
-                                if (roi.Width > 0 && roi.Height > 0)
-                                    CvInvoke.PutText(ptCanvas, label,
-                                        new Point(roi.X, Math.Max(11, roi.Y - 3)),
-                                        FontFace.HersheySimplex, 0.36, new MCvScalar(255, 255, 255), 1);
-                                csv.AppendLine(string.Join(",", new[] {
-                                group.Side, group.Group,
-                                row.FontPt.ToString(CultureInfo.InvariantCulture),
-                                row.LeftToRightIndex.ToString(CultureInfo.InvariantCulture),
-                                row.CharacterIndex.ToString(CultureInfo.InvariantCulture),
-                                m.GoldenRoi.X.ToString(CultureInfo.InvariantCulture),
-                                m.GoldenRoi.Y.ToString(CultureInfo.InvariantCulture),
-                                m.GoldenRoi.Width.ToString(CultureInfo.InvariantCulture),
-                                m.GoldenRoi.Height.ToString(CultureInfo.InvariantCulture),
-                                search.X.ToString(CultureInfo.InvariantCulture),
-                                search.Y.ToString(CultureInfo.InvariantCulture),
-                                search.Width.ToString(CultureInfo.InvariantCulture),
-                                search.Height.ToString(CultureInfo.InvariantCulture),
-                                m.BestDx.ToString(CultureInfo.InvariantCulture),
-                                m.BestDy.ToString(CultureInfo.InvariantCulture),
-                                m.UsedDx.ToString(CultureInfo.InvariantCulture),
-                                m.UsedDy.ToString(CultureInfo.InvariantCulture),
-                                m.Accepted ? "1" : "0",
-                                m.SearchYRadiusUsed.ToString(CultureInfo.InvariantCulture),
-                                m.Score.ToString("F6", CultureInfo.InvariantCulture),
-                                m.Before.ToString("F6", CultureInfo.InvariantCulture),
-                                m.Reason }));
-                            }
-                            ptCanvas.Save(Path.Combine(root,
-                                ptGroup.Key.ToString("00", CultureInfo.InvariantCulture) + "pt_ROI_BOXES.png"));
-                        }
-                    }
-                }
-                File.WriteAllText(Path.Combine(root, "ROI_BOXES.csv"), csv.ToString(), new UTF8Encoding(true));
-                Debug.WriteLine("[NativeFont][ROI] saved " + root);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine("[NativeFont][ROI] debug-only export failed: " + ex.Message);
-            }
-        }
-
-        private static void SaveLargeADiagnostics(GroupResult group, string mode)
-        {
-            // Bottom-most index is the first alphabetical A in each vertical font column.
-            // Verify against Golden CSV if the lettering order changes.
-            foreach (int pt in new[] { 11, 12 })
-            {
-                var rows = group.Characters.Where(c => c.FontPt == pt).ToList();
-                if (rows.Count == 0) continue;
-                var row = rows.OrderByDescending(c => c.CharacterIndex).First();
-                var m = row.Alignment;
-                if (m == null) continue;
-                try
-                {
-                    string closingTag = m.ClosingUsedForAlignment ? ("CLOSING" + m.ClosingKernelSize.ToString(CultureInfo.InvariantCulture)) : "BASELINE";
-                    string root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "FontAlignment_ADebug", mode,
-                        closingTag, group.Side, group.Group);
-                    Directory.CreateDirectory(root);
-                    string stem = pt.ToString("00") + "pt_" + row.CharacterIndex.ToString("000") + "_A";
-                    // Each tile uses the exact same Golden ROI dimensions. Test candidates
-                    // are already retained by BandMatch, so no new search is introduced.
-                    int h = m.Golden.GetLength(0), w = m.Golden.GetLength(1);
-                    int factor = 3, title = 28, margin = 8;
-                    int tw = w * factor, th = h * factor + title;
-                    using (var sheet = new Image<Bgr, byte>(tw * 3 + margin * 4, th * 2 + margin * 3))
-                    {
-                        sheet.SetZero();
-                        var panels = new List<byte[,]> { m.Golden, m.Original, m.Best, m.Used };
-                        string[] captions = { "GOLDEN", "TEST BEFORE", "BEST CANDIDATE", "USED CANDIDATE", "PIXEL OVERLAY", "SKELETON OVERLAY" };
-                        byte[,,] pixel = null, skel = null;
-                        using (Mat po = CharacterBandMatcher.BuildFinalOverlay(m.Golden, m.Used))
-                        using (Mat so = CharacterBandMatcher.BuildSkeletonOverlay(m.Golden, m.Used))
-                        using (var pi = po.ToImage<Bgr, byte>())
-                        using (var si = so.ToImage<Bgr, byte>())
-                        {
-                            pixel = pi.Data; skel = si.Data;
-                            for (int panel = 0; panel < 6; panel++)
-                            {
-                                int ox = margin + (panel % 3) * (tw + margin);
-                                int oy = margin + (panel / 3) * (th + margin);
-                                CvInvoke.PutText(sheet, captions[panel], new Point(ox + 2, oy + 19),
-                                    FontFace.HersheySimplex, 0.45, new MCvScalar(230, 230, 230), 1);
-                                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++)
-                                    {
-                                        byte b = 0, g = 0, r = 0;
-                                        if (panel < 4) { b = g = r = panels[panel][y, x]; }
-                                        else
-                                        {
-                                            var data = panel == 4 ? pixel : skel;
-                                            b = data[y, x, 0]; g = data[y, x, 1]; r = data[y, x, 2];
-                                        }
-                                        for (int yy = 0; yy < factor; yy++) for (int xx = 0; xx < factor; xx++)
-                                            {
-                                                int py = oy + title + y * factor + yy, px = ox + x * factor + xx;
-                                                sheet.Data[py, px, 0] = b;
-                                                sheet.Data[py, px, 1] = g;
-                                                sheet.Data[py, px, 2] = r;
-                                            }
-                                    }
-                            }
-                        }
-                        sheet.Save(Path.Combine(root, stem + "_comparison.png"));
-                    }
-                    string rowCsv = "mode,closing,side,group,font_pt,char_index,x,y,width,height,best_dx,best_dy,used_dx,used_dy,accepted,before,score,gain,search_radius,reason" + Environment.NewLine
-                        + string.Join(",", new string[] {
-                            mode, closingTag, group.Side, group.Group, pt.ToString(), row.CharacterIndex.ToString(),
-                            m.GoldenRoi.X.ToString(),m.GoldenRoi.Y.ToString(), m.GoldenRoi.Width.ToString(), m.GoldenRoi.Height.ToString(),
-                            m.BestDx.ToString(),m.BestDy.ToString(),m.UsedDx.ToString(),m.UsedDy.ToString(),
-                            m.Accepted ? "1" : "0", m.Before.ToString("F6", CultureInfo.InvariantCulture),
-                            m.Score.ToString("F6", CultureInfo.InvariantCulture),
-                            (m.Before - m.Score).ToString("F6", CultureInfo.InvariantCulture),
-                            m.SearchRadiusUsed.ToString(), m.Reason }) + Environment.NewLine;
-                    File.WriteAllText(Path.Combine(root, stem + "_metrics.csv"), rowCsv, new UTF8Encoding(true));
-                    Debug.WriteLine("[NativeFont][A-Debug] saved " + mode + "/" + closingTag + " " + group.Side + "/" + group.Group + " " + stem
-                        + " best=(" + m.BestDx + "," + m.BestDy + ") used=(" + m.UsedDx + "," + m.UsedDy + ") accepted=" + m.Accepted);
-                }
-                catch (Exception ex)
-                {
-                    // Diagnostics must NEVER terminate inspection.
-                    Debug.WriteLine("[NativeFont][A-Debug] file output failed: " + ex.Message);
-                }
             }
         }
 
@@ -1147,7 +1193,7 @@ namespace StandardOPage
         // called from different application threads.
         private static readonly SemaphoreSlim GlyphCpuBudget = new SemaphoreSlim(4, 4);
 
-        private static (byte[,] aligned, byte[,] gray, double angle) EccRigid(byte[,] golden, byte[,] test, byte[,] originalGray, string side, string group, double scale = .33)
+        private static (byte[,] aligned, byte[,] gray, double angle, double[,] inverse) EccRigid(byte[,] golden, byte[,] test, byte[,] originalGray, string side, string group, double scale = .33)
         {
             var totalTimer = Stopwatch.StartNew();
             long prepMs = 0, phaseMs = 0, scoringMs = 0, warpMs = 0, eccMs = 0;
@@ -1212,7 +1258,7 @@ namespace StandardOPage
                     + ", finalWarp=" + warpMs + ", other=" + Math.Max(0, totalTimer.ElapsedMilliseconds - prepMs - phaseMs - eccMs - scoringMs - warpMs)
                     + ", total=" + totalTimer.ElapsedMilliseconds + ", converged=" + converged + ", failed=" + failed
                     + ", small=" + sw + "x" + sh);
-                return (aligned, WarpOriginalGray(originalGray, Invert(M), w, h, side == "Yin"), rotation);
+                return (aligned, WarpOriginalGray(originalGray, Invert(M), w, h, side == "Yin"), rotation, Invert(M));
             }
         }
         // Default to NCC-only group translation for production evaluation.
@@ -1229,7 +1275,7 @@ namespace StandardOPage
         // TM_CCORR_NORMED, translation only (no rotation or scaling).
         // Transform returned by that Python function is Golden->Test; apply
         // its inverse (Test->Golden) when warping the actual Test image.
-        private static (byte[,] aligned, byte[,] gray, double angle) NccTranslation(
+        private static (byte[,] aligned, byte[,] gray, double angle, double[,] inverse) NccTranslation(
             byte[,] golden, byte[,] test, byte[,] originalGray, string side, string group,
             double scale = .33, int radius = 60)
         {
@@ -1269,19 +1315,49 @@ namespace StandardOPage
                         + ", dy=" + dy.ToString("F3", CultureInfo.InvariantCulture)
                         + ", score=" + max.ToString("F6", CultureInfo.InvariantCulture)
                         + ", small=" + sw + "x" + sh);
-                    return (aligned, WarpOriginalGray(originalGray, inverse, w, h, side == "Yin"), 0.0);
+                    return (aligned, WarpOriginalGray(originalGray, inverse, w, h, side == "Yin"), 0.0, inverse);
                 }
             }
         }
 
         public static List<GroupResult> Analyze(Mat alreadyCroppedArea, string goldenDirectory, string side,
-            int xRadius = 48, int yRadius = 12, int maxXRadius = 96, double eccScale = .33)
+            int xRadius = 48, int yRadius = 12, int maxXRadius = 96, double eccScale = .33,
+            Mat realCapturedExtension = null, int capturedTopRows = 0)
         {
             if (side != "Yin" && side != "Yang") throw new ArgumentException("side must be Yin or Yang");
             Stopwatch watch = Stopwatch.StartNew();
             var loaded = GoldenCharacters.Load(goldenDirectory, side);
             var ignoreKeys = FontIgnoreSettings.Load(goldenDirectory);
             Debug.WriteLine("[NativeFont][" + side + "] golden load ms=" + watch.ElapsedMilliseconds);
+            // Use genuine edge pixels where available; otherwise retain baseline.
+            byte[,] realExtendedBin = null, realExtendedGray = null;
+            if (realCapturedExtension != null && !realCapturedExtension.IsEmpty)
+            {
+                try
+                {
+                    if (realCapturedExtension.Width != alreadyCroppedArea.Width
+                        || realCapturedExtension.Height <= alreadyCroppedArea.Height
+                        || capturedTopRows < 0 || capturedTopRows >
+                            realCapturedExtension.Height - alreadyCroppedArea.Height)
+                        throw new ArgumentException("Invalid true-pixel extension geometry");
+                    using (Mat extGray = new Mat())
+                    {
+                        if (realCapturedExtension.NumberOfChannels == 1)
+                            realCapturedExtension.CopyTo(extGray);
+                        else CvInvoke.CvtColor(realCapturedExtension, extGray, ColorConversion.Bgr2Gray);
+                        realExtendedGray = CharacterBandMatcher.ReadGray(extGray);
+                        realExtendedBin = GoldenCharacters.Binary(realExtendedGray, side == "Yin");
+                    }
+                    Debug.WriteLine("[AReal] Captured extended image loaded: "
+                        + realCapturedExtension.Width + "x" + realCapturedExtension.Height);
+                }
+                catch (Exception error)
+                {
+                    Debug.WriteLine("[AReal] Could not load extended capture: " + error);
+                    realExtendedBin = null;
+                    realExtendedGray = null;
+                }
+            }
             byte[,] refbin = GoldenCharacters.Binary(loaded.reference, side == "Yin");
             using (Mat srcGray = new Mat())
             {
@@ -1352,6 +1428,55 @@ namespace StandardOPage
                         + ", active=" + glyphs.Count(glyph => FontClosingSettings.ShouldApply(glyph.FontPt))
                         + "/" + glyphs.Length + " (match-only)");
                     var matches = new CharacterBandMatcher.Match[glyphs.Length];
+                    var realComparisons = new ARealComparison[glyphs.Length];
+                    var useRealGray = new bool[glyphs.Length];
+                    bool hasEdgeGlyph = glyphs.Any(r =>
+                        FontEdgeAlignment.NeedsExtendedSearch(r.Y0, r.Y1, r.SourceHeight));
+                    byte[,] realAligned = null, realValid = null, realGolden = null;
+                    byte[,] realAlignedGray = null;
+                    int actualRealRows = realExtendedBin == null ? 0
+                        : realExtendedBin.GetLength(0) - height;
+                    int topRows = realExtendedBin == null ? 0 : capturedTopRows;
+                    int bottomRows = Math.Max(0, actualRealRows - topRows);
+                    if (hasEdgeGlyph && actualRealRows > 0)
+                    {
+                        try
+                        {
+                            // Coarse startX and the group affine map are reused;
+                            // there is NO second registration for the real capture.
+                            byte[,] realGroup = CharacterBandMatcher.Slice(realExtendedBin,
+                                coarse.startX + left, 0, len, height + actualRealRows);
+                            byte[,] realGroupGray = CharacterBandMatcher.Slice(realExtendedGray,
+                                coarse.startX + left, 0, len, height + actualRealRows);
+                            // Preserve group registration; shift only the coordinate
+                            // origin to account for extra genuine TOP rows.
+                            var extendedMap = OffsetAffineForTopRows(ecc.inverse, topRows);
+                            using (Mat realSource = CharacterBandMatcher.WriteGray(realGroup))
+                            using (Mat validitySource = CharacterBandMatcher.WriteGray(
+                                FullValidMask(height + actualRealRows, len)))
+                            {
+                                realAligned = WarpFromMat(realSource, extendedMap,
+                                    len, height + actualRealRows, Inter.Nearest);
+                                realValid = WarpFromMat(validitySource, extendedMap,
+                                    len, height + actualRealRows, Inter.Nearest);
+                            }
+                            realAlignedGray = WarpOriginalGray(realGroupGray,
+                                extendedMap, len, height + actualRealRows, side == "Yin");
+                            realGolden = ExtendGoldenWithBlankRows(g, topRows, bottomRows);
+                            Debug.WriteLine("[AReal][" + side + "][" + group
+                                + "] real top/bottom=" + topRows + "/" + bottomRows
+                                + " originalHeight=" + height);
+                        }
+                        catch (Exception error)
+                        {
+                            realAligned = null; realValid = null; realGolden = null;
+                            realAlignedGray = null;
+                            Debug.WriteLine("[AReal] Registration replay unavailable: " + error);
+                        }
+                    }
+                    else if (hasEdgeGlyph)
+                        Debug.WriteLine("[EdgeAlign] Real rows unavailable for " + side
+                            + "; baseline unchanged.");
                     // Per-side <=3; process-wide <=4 including simultaneous Yin/Yang.
                     int workerCount = Math.Max(1, Math.Min(3, Environment.ProcessorCount));
                     Stopwatch glyphWatch = Stopwatch.StartNew();
@@ -1365,9 +1490,100 @@ namespace StandardOPage
                             GlyphCpuBudget.Wait();
                             try
                             {
-                                matches[i] = CharacterBandMatcher.BandMatch(
+                                var baseline = CharacterBandMatcher.BandMatch(
                                     g, ecc.aligned, roi, xRadius, yRadius, 12, maxXRadius, false,
                                     FontClosingSettings.ShouldApply(glyph.FontPt), closingKernelSize);
+                                matches[i] = baseline;
+                                int leftIndex = FontIgnoreSettings.ToLeftToRightIndex(glyph, allGlyphs);
+                                if (hasEdgeGlyph && FontEdgeAlignment.NeedsExtendedSearch(
+                                    glyph.Y0, glyph.Y1, glyph.SourceHeight))
+                                {
+                                    realComparisons[i] = new ARealComparison
+                                    {
+                                        FontPt = glyph.FontPt,
+                                        LeftIndex = leftIndex,
+                                        GoldenIndex = glyph.Index,
+                                        RoiY = roi.Y,
+                                        RoiBottom = roi.Bottom,
+                                        OriginalHeight = height,
+                                        ExtraCapturedRows = bottomRows,
+                                        ExtraCapturedTopRows = topRows,
+                                        Baseline = baseline,
+                                        Real = null,
+                                        Applied = false,
+                                        ApplyReason = "NO_VALID_REAL_CAPTURE"
+                                    };
+                                    if (realAligned != null && realValid != null && realGolden != null)
+                                    {
+                                        try
+                                        {
+                                            realComparisons[i].ApplyReason = "NO_ACCEPTABLE_REAL_MATCH";
+                                            var extendedRoi = new Rectangle(roi.X, roi.Y + topRows,
+                                                roi.Width, roi.Height);
+                                            var realMatch = CharacterBandMatcher.BandMatch(
+                                                realGolden, realAligned, extendedRoi, xRadius, yRadius,
+                                                FontEdgeAlignment.SearchPadding, maxXRadius, false,
+                                                FontClosingSettings.ShouldApply(glyph.FontPt),
+                                                closingKernelSize, FontEdgeAlignment.MaxVerticalSearch,
+                                                realValid);
+                                            if (realMatch != null && realMatch.Score < 90)
+                                            {
+                                                bool realPatchValid = IsEntirelyReal(realValid,
+                                                    extendedRoi, realMatch.UsedDx, realMatch.UsedDy);
+                                                bool enoughGain = baseline == null || !baseline.Accepted
+                                                    || (realMatch.Score + 0.15 < baseline.Score);
+                                                // Do not replace a normal in-bounds match merely
+                                                // because an enlarged search produced a lower score.
+                                                // Only an ROI actually using pixels OUTSIDE the
+                                                // production crop qualifies for border correction.
+                                                bool usesOuterPixels =
+                                                    roi.Y + realMatch.UsedDy < 0 ||
+                                                    roi.Bottom + realMatch.UsedDy > height;
+                                                bool applied = realAlignedGray != null
+                                                    && realMatch.Accepted && realPatchValid
+                                                    && enoughGain && usesOuterPixels;
+                                                // Preserve production ROI coordinates even though
+                                                // the extended matcher has a shifted Y origin.
+                                                realMatch.GoldenRoi = roi;
+                                                if (applied)
+                                                {
+                                                    matches[i] = realMatch;
+                                                    useRealGray[i] = true;
+                                                }
+                                                string decision = applied ? "REAL_ACCEPTED_APPLIED"
+                                                    : !realMatch.Accepted ? "REAL_NOT_ACCEPTED"
+                                                    : !realPatchValid ? "INVALID_CAPTURED_PIXELS"
+                                                    : !enoughGain ? "INSUFFICIENT_IMPROVEMENT"
+                                                    : !usesOuterPixels ? "NO_OUTER_PIXELS_NEEDED"
+                                                    : "BASELINE_UNCHANGED";
+                                                realComparisons[i] = new ARealComparison
+                                                {
+                                                    FontPt = glyph.FontPt,
+                                                    LeftIndex = leftIndex,
+                                                    GoldenIndex = glyph.Index,
+                                                    RoiY = roi.Y,
+                                                    RoiBottom = roi.Bottom,
+                                                    OriginalHeight = height,
+                                                    ExtraCapturedRows = bottomRows,
+                                                    ExtraCapturedTopRows = topRows,
+                                                    Baseline = baseline,
+                                                    Real = realMatch,
+                                                    Applied = applied,
+                                                    ApplyReason = decision
+                                                };
+                                                Debug.WriteLine("[AReal][" + side + "][" + glyph.FontPt
+                                                    + "pt][L#" + leftIndex + "] " + decision
+                                                    + " baseline=" + (baseline == null ? "null" : Number(baseline.Score))
+                                                    + " real=" + Number(realMatch.Score));
+                                            }
+                                        }
+                                        catch (Exception error)
+                                        {
+                                            realComparisons[i].ApplyReason = "REAL_MATCH_EXCEPTION";
+                                            Debug.WriteLine("[EdgeAlign] Glyph comparison failed: " + error);
+                                        }
+                                    }
+                                }
                             }
                             finally { GlyphCpuBudget.Release(); }
                         });
@@ -1378,6 +1594,9 @@ namespace StandardOPage
                         if (match == null) continue;
                         var glyph = glyphs[i];
                         var roi = match.GoldenRoi;
+                        // If a genuine extended A match was applied, propagate
+                        // its matching real GRAY patch to final AOI thresholding.
+                        byte[,] officialGray = useRealGray[i] ? realAlignedGray : ecc.gray;
                         result.Characters.Add(new CharacterResult
                         {
                             FontPt = glyph.FontPt,
@@ -1389,20 +1608,24 @@ namespace StandardOPage
                             for (int x = 0; x < roi.Width; x++)
                             {
                                 result.Aligned[roi.Y + y, roi.X + x] = match.Used[y, x];
-                                int sy = roi.Y + match.UsedDy + y;
+                                int sy = roi.Y + match.UsedDy + y
+                            + (useRealGray[i] ? topRows : 0);
                                 int sx = roi.X + match.UsedDx + x;
-                                if (sy >= 0 && sy < ecc.gray.GetLength(0) && sx >= 0 && sx < ecc.gray.GetLength(1))
-                                    result.AlignedGray[roi.Y + y, roi.X + x] = ecc.gray[sy, sx];
+                                if (officialGray != null && sy >= 0 && sy < officialGray.GetLength(0)
+                                    && sx >= 0 && sx < officialGray.GetLength(1))
+                                    result.AlignedGray[roi.Y + y, roi.X + x] = officialGray[sy, sx];
                             }
                     }
+                    // Preserve compact evidence of applied/rollback decisions.
+                    SaveARealComparisons(side, group, alignMode, realComparisons);
                     // Mask after all active matches are merged. Never change the
                     // shared GoldenCharacters cache or the original captured image.
                     MaskIgnoredCharacters(result, ignoredGlyphs, loaded.xoffsets, left, side == "Yin", allGlyphs);
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] parallel glyph ms="
                         + glyphWatch.ElapsedMilliseconds + ", workers=" + workerCount + ", globalMax=4");
                     results.Add(result);
-                    SaveLargeADiagnostics(result, alignMode);
-                    SaveGlyphRoiBoxes(result, alignMode);
+                    // Large A-specific diagnostic sheets are no longer saved on every inspection.
+                    // ROI box diagnostic images are disabled for the stable profile.
                     Debug.WriteLine("[NativeFont][" + side + "][" + group + "] characters=" + result.Characters.Count + ", total elapsed ms=" + watch.ElapsedMilliseconds);
                 }
                 return results;

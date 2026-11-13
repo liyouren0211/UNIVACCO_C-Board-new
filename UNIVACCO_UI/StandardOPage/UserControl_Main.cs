@@ -493,6 +493,8 @@ namespace UNIVACCO_UI
         private async Task SystemProceess_FontArea(Mat sourceimg3, Mat sourceimg4)
         {
             Mat yinarea = new Mat(), yangarea = new Mat();
+            Mat yinRealExtended = null, yangRealExtended = null;
+            int yinCapturedTopRows = 0, yangCapturedTopRows = 0;
 
             // NativeFontAlignment 使用 CSV + 字元 BMP 重建 Golden Sample。
             // 不能再以舊版 Yin_template_3pt.bmp ~ 12pt.bmp 數量作為前置條件。
@@ -521,7 +523,13 @@ namespace UNIVACCO_UI
             // ================================================================
             // 2. Python 新版陰陽版切割：Valley 灰階 Profile + Gaussian
             // ================================================================
-            (yinarea, yangarea) = await CropYinYangArea(fontarea);
+            // Keep the original AOI crops unchanged. Capture additional real
+            // pixels at BOTH image boundaries for Yin and Yang. Only boundary
+            // glyphs enter the supplemental matching step.
+            var edgeMargins = FontEdgeAlignment.RequiredMargins(goldenDirectory);
+            (yinarea, yangarea, yinRealExtended, yangRealExtended,
+                yinCapturedTopRows, yangCapturedTopRows) =
+                await CropYinYangArea(fontarea, edgeMargins);
 
             if (yinarea == null || yinarea.IsEmpty)
                 throw new Exception("陰版裁切結果為空。");
@@ -548,7 +556,9 @@ namespace UNIVACCO_UI
                     CurrentCardType_Params,
                     CurrentPrintType_Params,
                     SaveOptions,
-                    selectedCardType));
+                    selectedCardType,
+                    yinRealExtended,
+                    yinCapturedTopRows));
 
             var yang_task = Task.Run(() =>
                 OCT_AlgorithmHelper.Yang_analz(
@@ -558,7 +568,9 @@ namespace UNIVACCO_UI
                     CurrentPrintType_Params,
                     SaveOptions,
                     selectedCardType,
-                    breakArea03Ready));
+                    breakArea03Ready,
+                    yangRealExtended,
+                    yangCapturedTopRows));
 
             // BreakArea03 如果正常產出就先存入全域；若 Yang 分析失敗，
             // 這個 continuation 不影響下面真正的錯誤判斷。
@@ -568,7 +580,16 @@ namespace UNIVACCO_UI
                     this.BreakArea_03_crop = t.Result;
             }, TaskScheduler.FromCurrentSynchronizationContext());
 
-            await Task.WhenAll(yin_task, yang_task);
+            try
+            {
+                await Task.WhenAll(yin_task, yang_task);
+            }
+            finally
+            {
+                // Hold both captures until their native matching tasks finish.
+                yinRealExtended?.Dispose();
+                yangRealExtended?.Dispose();
+            }
 
             var yin_result = yin_task.Result;
             var yang_result = yang_task.Result;
@@ -637,13 +658,47 @@ namespace UNIVACCO_UI
         /// 5. 中線左側切 2120px 為陽版、右側切 2080px 為陰版
         /// 6. 兩側皆逆時針旋轉 90 度
         /// </summary>
-        private Task<(Mat, Mat)> CropYinYangArea(Mat fontarea)
+        // Capture actual sensor pixels (NEVER artificial padding). Baseline images
+        // stay exactly the original size and are used by every existing AOI stage.
+        private static Mat BuildGenuineEdgeCapture(Mat source, int xStart,
+            int baseWidth, int requiredTop, int requiredBottom, out int actualTop)
         {
-            // Valley 平均值及 Gaussian 大量迴圈不應阻塞 UI 執行緒。
-            return Task.Run(() => CropYinYangAreaCore(fontarea));
+            actualTop = 0;
+            int bottom = Math.Min(Math.Max(0, requiredBottom), Math.Max(0, xStart));
+            int top = Math.Min(Math.Max(0, requiredTop),
+                Math.Max(0, source.Width - (xStart + baseWidth)));
+            if (top == 0 && bottom == 0) return null;
+            int newStart = xStart - bottom;
+            int newWidth = baseWidth + bottom + top;
+            if (newStart < 0 || newStart + newWidth > source.Width)
+                return null;
+            Mat rotated = new Mat();
+            try
+            {
+                using (Mat expanded = new Mat(source,
+                    new Rectangle(newStart, 0, newWidth, source.Height)))
+                    CvInvoke.Rotate(expanded, rotated, RotateFlags.Rotate90CounterClockwise);
+                actualTop = top;
+                Debug.WriteLine("[EdgeAlign] Real capture: top=" + top
+                    + " bottom=" + bottom + " rotated=" + rotated.Width
+                    + "x" + rotated.Height);
+                return rotated;
+            }
+            catch
+            {
+                rotated.Dispose();
+                throw;
+            }
         }
 
-        private (Mat, Mat) CropYinYangAreaCore(Mat fontarea)
+        private Task<(Mat, Mat, Mat, Mat, int, int)> CropYinYangArea(
+            Mat fontarea, FontEdgeAlignment.CaptureMargins margins)
+        {
+            return Task.Run(() => CropYinYangAreaCore(fontarea, margins));
+        }
+
+        private (Mat, Mat, Mat, Mat, int, int) CropYinYangAreaCore(
+            Mat fontarea, FontEdgeAlignment.CaptureMargins margins)
         {
             const int yangWidth = 2120;
             const int yinWidth = 2080;
@@ -778,7 +833,28 @@ namespace UNIVACCO_UI
                         $"[YinYang Valley] Rotate OK: Yin={yinRotated.Width}x{yinRotated.Height}, " +
                         $"Yang={yangRotated.Width}x{yangRotated.Height}");
 
-                    return (yinRotated, yangRotated);
+                    // Rotate90CounterClockwise maps extra pixels at the RIGHT
+                    // of a raw crop to TOP rows; extra at LEFT to BOTTOM rows.
+                    // Original [0..height) pixel coordinates are not changed.
+                    Mat yinRealExtended = null, yangRealExtended = null;
+                    int yinTopRows = 0, yangTopRows = 0;
+                    try
+                    {
+                        yinRealExtended = BuildGenuineEdgeCapture(fontarea,
+                            middleBoundary, yinWidth, margins.YinTop, margins.YinBottom,
+                            out yinTopRows);
+                        yangRealExtended = BuildGenuineEdgeCapture(fontarea,
+                            leftBoundary, yangWidth, margins.YangTop, margins.YangBottom,
+                            out yangTopRows);
+                    }
+                    catch
+                    {
+                        yinRealExtended?.Dispose();
+                        yangRealExtended?.Dispose();
+                        throw;
+                    }
+                    return (yinRotated, yangRotated, yinRealExtended,
+                        yangRealExtended, yinTopRows, yangTopRows);
                 }
                 finally
                 {

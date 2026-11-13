@@ -412,7 +412,7 @@ namespace StandardOPage
                 List<TemplateData> legacyTemplates,
                 OCT_Parameters_CardType currentParams,
                 OCT_Parameters_SaveOptions saveOptions,
-                string cardType)
+                string cardType, Mat yinRealExtended = null, int capturedTopRows = 0)
         {
             RememberEngineeringParameters(currentParams);
 
@@ -422,7 +422,7 @@ namespace StandardOPage
                 true,
                 currentParams,
                 saveOptions,
-                cardType);
+                cardType, yinRealExtended, capturedTopRows);
 
             return (
                 result.Item1,
@@ -471,7 +471,8 @@ namespace StandardOPage
                 OCT_Parameters_CardType currentParams,
                 OCT_Parameters_SaveOptions saveOptions,
                 string cardType,
-                TaskCompletionSource<Mat> breakArea03Ready = null)
+                TaskCompletionSource<Mat> breakArea03Ready = null,
+                Mat yangRealExtended = null, int capturedTopRows = 0)
         {
             RememberEngineeringParameters(currentParams);
 
@@ -481,7 +482,8 @@ namespace StandardOPage
                 false,
                 currentParams,
                 saveOptions,
-                cardType);
+                cardType,
+                yangRealExtended, capturedTopRows);
 
             Mat breakArea03 = new Mat();
             try
@@ -925,14 +927,17 @@ namespace StandardOPage
             Font_Imgs, Font_Imgs, Font_Results, Font_Imgs, Font_Results, List<FontInfo>)
             AnalyzeSideNative(Mat area, List<TemplateData> legacyTemplates,
                 bool isYin, OCT_Parameters_CardType currentParams,
-                OCT_Parameters_SaveOptions saveOptions, string cardType)
+                OCT_Parameters_SaveOptions saveOptions, string cardType,
+                Mat yangRealExtended = null, int capturedTopRows = 0)
         {
             if (area == null || area.IsEmpty)
                 throw new ArgumentException("O-station font image is empty");
             string side = isYin ? "Yin" : "Yang";
             string goldenPath = ResolveCharacterGoldenPath();
             var reference = GoldenCharacters.Load(goldenPath, side);
-            var groups = NativeCharacterAlignmentPipeline.Analyze(area, goldenPath, side);
+            var groups = NativeCharacterAlignmentPipeline.Analyze(area, goldenPath, side,
+                realCapturedExtension: yangRealExtended,
+                capturedTopRows: capturedTopRows);
             RememberNativeGroupOverlays(groups, side);
             if (ShouldSaveDebug(saveOptions))
             {
@@ -1095,9 +1100,11 @@ namespace StandardOPage
                 bool isYin,
                 OCT_Parameters_CardType currentParams,
                 OCT_Parameters_SaveOptions saveOptions,
-                string cardType)
+                string cardType,
+                Mat yangRealExtended = null, int capturedTopRows = 0)
         {
-            return AnalyzeSideNative(area, legacyTemplates, isYin, currentParams, saveOptions, cardType);
+            return AnalyzeSideNative(area, legacyTemplates, isYin, currentParams,
+                saveOptions, cardType, yangRealExtended, capturedTopRows);
             string sideName = isYin ? "Yin" : "Yang";
             Stopwatch sw = Stopwatch.StartNew();
 

@@ -4738,7 +4738,8 @@ namespace StandardOPage
                 OCT_Parameters_CardType current_params,
                 OCT_Parameters_PrintType current_printtype_params,
                 OCT_Parameters_SaveOptions saveoptions,
-                string cardType
+                string cardType,
+                Mat yinRealExtended = null, int capturedTopRows = 0
             )
         {
             try
@@ -4749,7 +4750,7 @@ namespace StandardOPage
                 YinTemplates,
                 current_params,
                 saveoptions,
-                cardType);
+                cardType, yinRealExtended, capturedTopRows);
             }
             catch (Exception ex)
             {
@@ -4850,7 +4851,8 @@ namespace StandardOPage
                 OCT_Parameters_PrintType current_printtype_params,
                 OCT_Parameters_SaveOptions saveoptions,
                 string cardType,
-                TaskCompletionSource<Mat> breakArea03Ready = null)
+                TaskCompletionSource<Mat> breakArea03Ready = null,
+                Mat yangRealExtended = null, int capturedTopRows = 0)
         {
             try
             {
@@ -4861,7 +4863,8 @@ namespace StandardOPage
                     current_params,
                     saveoptions,
                     cardType,
-                    breakArea03Ready);
+                    breakArea03Ready,
+                    yangRealExtended, capturedTopRows);
             }
             catch (Exception ex)
             {
